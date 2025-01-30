@@ -1,12 +1,12 @@
 import XCTest
-@testable import BackgroudLocationPlugin
+@testable import BackgroundLocationPlugin
 
-class BackgroudLocationTests: XCTestCase {
+class BackgroundLocationTests: XCTestCase {
     func testEcho() {
         // This is an example of a functional test case for a plugin.
         // Use XCTAssert and related functions to verify your tests produce the correct results.
 
-        let implementation = BackgroudLocation()
+        let implementation = BackgroundLocation()
         let value = "Hello, World!"
         let result = implementation.echo(value)
 

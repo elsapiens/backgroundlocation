@@ -4,7 +4,7 @@ export default {
     {
       file: 'dist/plugin.js',
       format: 'iife',
-      name: 'capacitorBackgroudLocation',
+      name: 'capacitorBackgroundLocation',
       globals: {
         '@capacitor/core': 'capacitorExports',
       },

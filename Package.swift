@@ -7,22 +7,22 @@ let package = Package(
     products: [
         .library(
             name: "ElsapiensBackgroundLocation",
-            targets: ["BackgroudLocationPlugin"])
+            targets: ["BackgroundLocationPlugin"])
     ],
     dependencies: [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "7.0.0")
     ],
     targets: [
         .target(
-            name: "BackgroudLocationPlugin",
+            name: "BackgroundLocationPlugin",
             dependencies: [
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm")
             ],
-            path: "ios/Sources/BackgroudLocationPlugin"),
+            path: "ios/Sources/BackgroundLocationPlugin"),
         .testTarget(
-            name: "BackgroudLocationPluginTests",
-            dependencies: ["BackgroudLocationPlugin"],
-            path: "ios/Tests/BackgroudLocationPluginTests")
+            name: "BackgroundLocationPluginTests",
+            dependencies: ["BackgroundLocationPlugin"],
+            path: "ios/Tests/BackgroundLocationPluginTests")
     ]
 )
