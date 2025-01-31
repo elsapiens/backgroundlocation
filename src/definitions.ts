@@ -1,3 +1,27 @@
+import type { PluginListenerHandle } from "@capacitor/core";
+
+export interface LocationData {
+  reference: string;
+  index: number;
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  speed: number;
+  timestamp: number;
+}
+
 export interface BackgroundLocationPlugin {
-  echo(options: { value: string }): Promise<{ value: string }>;
+
+  startTracking({reference}: {reference: string}): Promise<void>;
+
+  stopTracking(): Promise<void>;
+
+  getStoredLocations(): Promise<{ locations: LocationData[] }>;
+
+  clearStoredLocations(): Promise<void>;
+
+  addListener(eventName: 'locationUpdate', listenerFunc: (data: LocationData) => void): Promise<PluginListenerHandle>;
+
+  getLastLocation({reference}: {reference: string}): Promise<void>;
+
 }

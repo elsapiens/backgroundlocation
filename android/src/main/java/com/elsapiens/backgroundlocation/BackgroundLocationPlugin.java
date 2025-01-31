@@ -2,99 +2,179 @@ package com.elsapiens.backgroundlocation;
 
 import android.Manifest;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.os.Build;
 import android.os.Looper;
 import android.util.Log;
+
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.google.android.gms.location.*;
-import com.google.android.gms.location.LocationCallback;
 
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
-import android.hardware.SensorManager;
 
 @CapacitorPlugin(name = "BackgroundLocation", permissions = {
-    @com.getcapacitor.annotation.Permission(
-        alias = "location",
-        strings = {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_BACKGROUND_LOCATION}
-    )
+        @com.getcapacitor.annotation.Permission(alias = "location", strings = {
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+                Manifest.permission.FOREGROUND_SERVICE,
+                Manifest.permission.FOREGROUND_SERVICE_LOCATION
+        })
 })
 public class BackgroundLocationPlugin extends Plugin implements SensorEventListener {
     private static final String TAG = "BackgroundLocation";
-    private FusedLocationProviderClient fusedLocationClient;
+    private  FusedLocationProviderClient fusedLocationClient;
     private LocationCallback locationCallback;
-    private SQLiteDatabaseHelper db;
+    private  SQLiteDatabaseHelper db;
     private String currentReference;
     private Location lastLocation;
-    private SensorManager sensorManager;
-    private Sensor accelerometer;
     private boolean isMoving = false;
+    private boolean isTrackingActive = false; // 🚀 NEW: Track if location tracking is active
     private float lastAcceleration = 0;
-    private long lastGpsUpdateTime = 0;
+    private long lastMovementTime = 0;
+    private LocationBroadcastReceiver locationReceiver;
+    private static BackgroundLocationPlugin instance;
+
+    public BackgroundLocationPlugin() {
+        instance = this; // ✅ Save instance for use in static methods
+    }
+
+    public static BackgroundLocationPlugin getInstance() {
+        return instance;
+    }
+
+    @Override
+    public void load() {
+        super.load();
+        Context context = getContext();
+        db = new SQLiteDatabaseHelper(getContext());
+        this.fusedLocationClient = LocationServices.getFusedLocationProviderClient(context);
+
+        // 🔹 Register Broadcast Receiver
+        locationReceiver = new LocationBroadcastReceiver();
+        IntentFilter filter = new IntentFilter("BackgroundLocationUpdate");
+        ContextCompat.registerReceiver(context, locationReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
+        Log.d(TAG, "📡 LocationBroadcastReceiver Registered");
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        super.handleOnDestroy();
+        Context context = getContext();
+        if (locationReceiver != null) {
+            context.unregisterReceiver(locationReceiver);
+            Log.d(TAG, "📡 LocationBroadcastReceiver Unregistered");
+        }
+    }
+
+
+    @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        Log.d(TAG, "App Resumed - Pushing Latest Location");
+        if (currentReference != null) {
+            pushLatestLocationToAngular(currentReference); // Send latest location to Angular when the app resumes
+        }
+    }
+
+    private void pushLatestLocationToAngular(String reference) {
+        LocationItem location = db.getLastLocation(reference);
+        if (location != null) {
+            pushUpdateToCapacitor(location);
+        }
+    }
 
     @PluginMethod
     public void startTracking(PluginCall call) {
-        if (!call.hasOption("reference")) {
+        if (!call.getData().has("reference")) {
             call.reject("Missing 'reference' parameter.");
             return;
         }
         currentReference = call.getString("reference");
 
-        if (ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.FOREGROUND_SERVICE) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(call);
             return;
         }
 
-        Context context = getContext();
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(context);
-        db = new SQLiteDatabaseHelper(context);
-
-        // Initialize accelerometer to detect motion
-        sensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
-        if (sensorManager != null) {
-            accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_UI);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // Android 14+
+            if (ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.FOREGROUND_SERVICE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(call);
+                return;
+            }
         }
 
-        requestLocationUpdate(); // Start tracking immediately
+        Context context = getContext();
+        Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
+        serviceIntent.putExtra("reference", currentReference);
+        context.startForegroundService(serviceIntent);
+
+        isTrackingActive = true;
         call.resolve();
     }
 
+    @PluginMethod
+    public void clearStoredLocations(PluginCall call) {
+        try {
+            db.clearStoredLocations();
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Failed to clear stored locations", e);
+        }
+    }
+
+    @PluginMethod
+    public void getLastLocation(PluginCall call) {
+        if (!call.getData().has("reference")) {
+            call.reject("Missing 'reference' parameter.");
+            return;
+        }
+        String reference = call.getString("reference");
+        pushLatestLocationToAngular(reference);
+    }
+
     private void requestLocationUpdate() {
-        LocationRequest locationRequest = LocationRequest.create();
-        locationRequest.setInterval(3000); // Request location every 3 seconds
-        locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+        LocationRequest locationRequest = new LocationRequest.Builder(
+                Priority.PRIORITY_HIGH_ACCURACY,
+                3000).setMinUpdateDistanceMeters(10)
+                .setWaitForAccurateLocation(true)
+                .build();
 
         locationCallback = new LocationCallback() {
             @Override
-            public void onLocationResult(LocationResult locationResult) {
-                if (locationResult != null) {
-                    for (Location location : locationResult.getLocations()) {
-                        if (shouldSaveLocation(location)) {
-                            saveToDatabase(location);
-                            pushUpdateToAngular(location);  // 🔥 Send live update to Angular
-                        }
+            public void onLocationResult(@NonNull LocationResult locationResult) {
+                for (Location location : locationResult.getLocations()) {
+                    if (shouldSaveLocation(location)) {
+                        int index = db.getNextIndexForReference(currentReference);
+                        saveToDatabase(location, currentReference, index);
+                        pushUpdateToCapacitor(location, index);
                     }
                 }
             }
         };
 
-        if (ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(getContext(),
+                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return;
         }
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
     }
 
     private boolean shouldSaveLocation(Location newLocation) {
-        if (lastLocation == null) return true;
+        if (lastLocation == null)
+            return true;
         float distance = lastLocation.distanceTo(newLocation);
 
         // Save if moved at least 10 meters or turned significantly
@@ -103,40 +183,62 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
 
     private boolean hasSignificantTurn(Location oldLocation, Location newLocation) {
         float bearingChange = Math.abs(oldLocation.getBearing() - newLocation.getBearing());
-        return bearingChange > 30; // Consider turns greater than 30 degrees
+        return bearingChange > 30;
     }
 
-    private void saveToDatabase(Location location) {
-        int index = db.getNextIndexForReference(currentReference);
-        db.insertLocation(currentReference, index, location.getLatitude(), location.getLongitude(), location.getTime(), location.getAccuracy());
+    public void saveToDatabase(Location location, String currentReference, int index) {
+        db.insertLocation(currentReference, index, location.getLatitude(), location.getLongitude(), location.getTime(),
+                location.getAccuracy());
         lastLocation = location;
-        lastGpsUpdateTime = System.currentTimeMillis();
-        Log.d(TAG, "Location Saved: " + location.getLatitude() + ", " + location.getLongitude() + " Accuracy: " + location.getAccuracy());
+        Log.d(TAG, "Location Saved: " + location.getLatitude() + ", " + location.getLongitude() + " Accuracy: "
+                + location.getAccuracy());
     }
 
-    private void pushUpdateToAngular(Location location) {
+    private void pushUpdateToCapacitor(Location location, int index) {
         JSObject data = new JSObject();
+        lastLocation = location;
+        data.put("reference", currentReference);
+        data.put("index", index);
         data.put("latitude", location.getLatitude());
         data.put("longitude", location.getLongitude());
-        data.put("accuracy", location.getAccuracy()); // Include accuracy
+        data.put("accuracy", location.getAccuracy());
         data.put("timestamp", location.getTime());
-        notifyListeners("locationUpdate", data);  // 🔥 Push update to Angular
+        notifyListeners("locationUpdate", data);
+    }
+
+    public void pushUpdateToCapacitor(LocationItem location) {
+        JSObject data = new JSObject();
+        data.put("reference", location.reference);
+        data.put("index", location.index);
+        data.put("latitude", location.latitude);
+        data.put("longitude", location.longitude);
+        data.put("accuracy", location.accuracy);
+        data.put("timestamp", location.timestamp);
+        notifyListeners("locationUpdate", data);
     }
 
     @PluginMethod
     public void stopTracking(PluginCall call) {
+        stopLocationUpdates();
+
+        Context context = getContext();
+        Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
+        context.stopService(serviceIntent);
+
+        call.resolve();
+    }
+
+    private void stopLocationUpdates() {
         if (fusedLocationClient != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
         }
-        if (sensorManager != null) {
-            sensorManager.unregisterListener(this);
-        }
-        call.resolve();
+        isTrackingActive = false; // 🚀 Mark tracking as inactive
+        Log.d(TAG, "Location tracking stopped.");
     }
 
     @PluginMethod
     public void getStoredLocations(PluginCall call) {
-        if (!call.hasOption("reference")) {
+        if (!call.getData().has("reference")) {
             call.reject("Missing 'reference' parameter.");
             return;
         }
@@ -153,17 +255,27 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
             float y = event.values[1];
             float z = event.values[2];
             float acceleration = (float) Math.sqrt(x * x + y * y + z * z);
-
             long currentTime = System.currentTimeMillis();
+
             if (Math.abs(acceleration - lastAcceleration) > 0.5) {
                 isMoving = true;
-                lastGpsUpdateTime = currentTime;
+                lastMovementTime = currentTime;
+
+                // 🚀 If movement is detected and tracking is inactive, restart location updates
+                if (!isTrackingActive) {
+                    Log.d(TAG, "User started moving. Restarting location tracking.");
+                    requestLocationUpdate();
+                    isTrackingActive = true;
+                }
             } else {
-                // If no GPS update in the last 5 seconds, assume stopped
-                if (currentTime - lastGpsUpdateTime > 5000) {
+                // 🚀 If no movement for 5+ seconds, stop location updates
+                if (isMoving && (currentTime - lastMovementTime > 5000)) {
+                    Log.d(TAG, "User stopped moving. Stopping location tracking.");
+                    stopLocationUpdates();
                     isMoving = false;
                 }
             }
+
             lastAcceleration = acceleration;
         }
     }

@@ -13,25 +13,110 @@ npx cap sync
 
 <docgen-index>
 
-* [`echo(...)`](#echo)
+* [`startTracking(...)`](#starttracking)
+* [`stopTracking()`](#stoptracking)
+* [`getStoredLocations()`](#getstoredlocations)
+* [`clearStoredLocations()`](#clearstoredlocations)
+* [`addListener('locationUpdate', ...)`](#addlistenerlocationupdate-)
+* [`getLastLocation(...)`](#getlastlocation)
+* [Interfaces](#interfaces)
 
 </docgen-index>
 
 <docgen-api>
 <!--Update the source file JSDoc comments and rerun docgen to update the docs below-->
 
-### echo(...)
+### startTracking(...)
 
 ```typescript
-echo(options: { value: string; }) => Promise<{ value: string; }>
+startTracking({ reference }: { reference: string; }) => Promise<void>
 ```
 
-| Param         | Type                            |
-| ------------- | ------------------------------- |
-| **`options`** | <code>{ value: string; }</code> |
-
-**Returns:** <code>Promise&lt;{ value: string; }&gt;</code>
+| Param     | Type                                |
+| --------- | ----------------------------------- |
+| **`__0`** | <code>{ reference: string; }</code> |
 
 --------------------
+
+
+### stopTracking()
+
+```typescript
+stopTracking() => Promise<void>
+```
+
+--------------------
+
+
+### getStoredLocations()
+
+```typescript
+getStoredLocations() => Promise<{ locations: LocationData[]; }>
+```
+
+**Returns:** <code>Promise&lt;{ locations: LocationData[]; }&gt;</code>
+
+--------------------
+
+
+### clearStoredLocations()
+
+```typescript
+clearStoredLocations() => Promise<void>
+```
+
+--------------------
+
+
+### addListener('locationUpdate', ...)
+
+```typescript
+addListener(eventName: 'locationUpdate', listenerFunc: (data: LocationData) => void) => Promise<PluginListenerHandle>
+```
+
+| Param              | Type                                                                     |
+| ------------------ | ------------------------------------------------------------------------ |
+| **`eventName`**    | <code>'locationUpdate'</code>                                            |
+| **`listenerFunc`** | <code>(data: <a href="#locationdata">LocationData</a>) =&gt; void</code> |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+--------------------
+
+
+### getLastLocation(...)
+
+```typescript
+getLastLocation({ reference }: { reference: string; }) => Promise<void>
+```
+
+| Param     | Type                                |
+| --------- | ----------------------------------- |
+| **`__0`** | <code>{ reference: string; }</code> |
+
+--------------------
+
+
+### Interfaces
+
+
+#### LocationData
+
+| Prop            | Type                |
+| --------------- | ------------------- |
+| **`reference`** | <code>string</code> |
+| **`index`**     | <code>number</code> |
+| **`latitude`**  | <code>number</code> |
+| **`longitude`** | <code>number</code> |
+| **`accuracy`**  | <code>number</code> |
+| **`speed`**     | <code>number</code> |
+| **`timestamp`** | <code>number</code> |
+
+
+#### PluginListenerHandle
+
+| Prop         | Type                                      |
+| ------------ | ----------------------------------------- |
+| **`remove`** | <code>() =&gt; Promise&lt;void&gt;</code> |
 
 </docgen-api>
