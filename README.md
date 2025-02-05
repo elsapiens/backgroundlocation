@@ -15,7 +15,7 @@ npx cap sync
 
 * [`startTracking(...)`](#starttracking)
 * [`stopTracking()`](#stoptracking)
-* [`getStoredLocations()`](#getstoredlocations)
+* [`getStoredLocations(...)`](#getstoredlocations)
 * [`clearStoredLocations()`](#clearstoredlocations)
 * [`addListener('locationUpdate', ...)`](#addlistenerlocationupdate-)
 * [`getLastLocation(...)`](#getlastlocation)
@@ -48,11 +48,15 @@ stopTracking() => Promise<void>
 --------------------
 
 
-### getStoredLocations()
+### getStoredLocations(...)
 
 ```typescript
-getStoredLocations() => Promise<{ locations: LocationData[]; }>
+getStoredLocations({ reference }: { reference: string; }) => Promise<{ locations: LocationData[]; }>
 ```
+
+| Param     | Type                                |
+| --------- | ----------------------------------- |
+| **`__0`** | <code>{ reference: string; }</code> |
 
 **Returns:** <code>Promise&lt;{ locations: LocationData[]; }&gt;</code>
 

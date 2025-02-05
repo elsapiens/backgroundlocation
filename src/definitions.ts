@@ -16,7 +16,7 @@ export interface BackgroundLocationPlugin {
 
   stopTracking(): Promise<void>;
 
-  getStoredLocations(): Promise<{ locations: LocationData[] }>;
+  getStoredLocations({reference}: {reference: string}): Promise<{ locations: LocationData[] }>;
 
   clearStoredLocations(): Promise<void>;
 

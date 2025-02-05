@@ -26,8 +26,8 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
   }
   }
 
-  async getStoredLocations(): Promise<{ locations: LocationData[] }> {
-    return { locations: this.locations };
+  async getStoredLocations({ reference }: { reference: string }): Promise<{ locations: LocationData[] }> {
+    return { locations: this.locations.filter((location) => location.reference === reference) };
   }
 
   async clearStoredLocations(): Promise<void> {
