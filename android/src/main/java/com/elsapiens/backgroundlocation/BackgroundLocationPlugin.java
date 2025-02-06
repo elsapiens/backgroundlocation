@@ -229,7 +229,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     }
 
     private void stopLocationUpdates() {
-        if (fusedLocationClient != null) {
+        if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
         }
         isTrackingActive = false; // 🚀 Mark tracking as inactive
