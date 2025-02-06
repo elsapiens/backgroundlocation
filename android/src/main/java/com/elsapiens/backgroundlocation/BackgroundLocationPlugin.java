@@ -83,7 +83,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     @Override
     protected void handleOnResume() {
         super.handleOnResume();
-        Log.d(TAG, "App Resumed - Pushing Latest Location");
+        Log.d(TAG, "App Resumed - Pushing Latest Location " + currentReference);
         if (currentReference != null) {
             pushLatestLocationToAngular(currentReference); // Send latest location to Angular when the app resumes
         }
@@ -109,7 +109,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // Android 14+
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.TIRAMISU) { // Android 14+
             if (ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.FOREGROUND_SERVICE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(call);
                 return;
