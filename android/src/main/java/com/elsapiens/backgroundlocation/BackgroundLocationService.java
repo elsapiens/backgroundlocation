@@ -8,6 +8,8 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.net.Uri;
+import android.os.Build;
 import android.os.IBinder;
 import android.os.Looper;
 
@@ -50,14 +52,14 @@ public class BackgroundLocationService extends Service {
     }
 
     private void requestLocationUpdates() {
+        if (!hasLocationPermissions()) {
+            requestPermissionsManually();
+            return;
+        }
         LocationRequest locationRequest = new LocationRequest.Builder(
                 Priority.PRIORITY_HIGH_ACCURACY,
                 5000).setMinUpdateDistanceMeters(10).build();
-
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                && ActivityCompat.checkSelfPermission(this,
-                        Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return;
         }
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
@@ -95,11 +97,32 @@ public class BackgroundLocationService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (!hasLocationPermissions()) {
+            requestPermissionsManually();
+            stopSelf(); // Stop service if permissions are missing
+            return START_NOT_STICKY;
+        }
         if (intent != null && intent.hasExtra("reference")) {
             reference = intent.getStringExtra("reference");
-            lastIndex = db.getNextIndexForReference(reference); // Resume index tracking
+            if (reference == null || reference.trim().isEmpty()) {
+                reference = "default_reference"; // Set a fallback reference to prevent null issues
+            }
+        } else {
+            reference = "default_reference"; // Another fallback to avoid null reference
         }
+        lastIndex = db.getNextIndexForReference(reference); // Resume index tracking safely
         return START_STICKY;
+    }
+
+    private void requestPermissionsManually() {
+        Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        intent.setData(Uri.parse("package:" + getPackageName()));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(intent);
+    }
+
+    private boolean hasLocationPermissions() {
+        return ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED;
     }
 
     @Nullable

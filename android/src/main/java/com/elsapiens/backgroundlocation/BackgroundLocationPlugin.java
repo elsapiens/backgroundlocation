@@ -98,6 +98,11 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
 
     @PluginMethod
     public void startTracking(PluginCall call) {
+
+        //check if already tracking
+        if (isTrackingActive) {
+            stopLocationUpdates();
+        }
         if (!call.getData().has("reference")) {
             call.reject("Missing 'reference' parameter.");
             return;
@@ -220,15 +225,15 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     @PluginMethod
     public void stopTracking(PluginCall call) {
         stopLocationUpdates();
+        call.resolve();
+    }
+
+    private void stopLocationUpdates() {
 
         Context context = getContext();
         Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
         context.stopService(serviceIntent);
 
-        call.resolve();
-    }
-
-    private void stopLocationUpdates() {
         if (fusedLocationClient != null && locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback);
         }

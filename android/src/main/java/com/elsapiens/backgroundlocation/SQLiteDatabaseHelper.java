@@ -72,11 +72,15 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
     }
 
     public int getNextIndexForReference(String reference) {
+        if (reference == null || reference.trim().isEmpty()) {
+            reference = "default_reference"; // Ensure a non-null reference
+        }
         SQLiteDatabase db = this.getReadableDatabase();
         Cursor cursor = db.rawQuery("SELECT MAX(idx) FROM " + TABLE_NAME + " WHERE reference = ?", new String[]{reference});
-        int index = 0;
-        if (cursor.moveToFirst()) {
-            index = cursor.getInt(0) + 1;
+
+        int index = 1;
+        if (cursor.moveToFirst() && !cursor.isNull(0)) {
+            index = cursor.getInt(0) + 1; // Avoid NULL + 1 issue
         }
         cursor.close();
         db.close();
