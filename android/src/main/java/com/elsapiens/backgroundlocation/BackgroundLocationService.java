@@ -9,7 +9,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.net.Uri;
-import android.os.Build;
 import android.os.IBinder;
 import android.os.Looper;
 
@@ -26,7 +25,6 @@ public class BackgroundLocationService extends Service {
     private SQLiteDatabaseHelper db;
     private String reference; // Store reference passed from the plugin
     private int lastIndex = 0; // Track the last index
-
     @Override
     public void onCreate() {
         super.onCreate();
@@ -50,9 +48,8 @@ public class BackgroundLocationService extends Service {
         startForeground(1, createNotification());
         requestLocationUpdates();
     }
-
     private void requestLocationUpdates() {
-        if (!hasLocationPermissions()) {
+        if (hasLocationPermissions()) {
             requestPermissionsManually();
             return;
         }
@@ -64,7 +61,6 @@ public class BackgroundLocationService extends Service {
         }
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
     }
-
     private void sendLocationUpdate(Location location, int index) {
         Intent intent = new Intent("BackgroundLocationUpdate");
         intent.putExtra("reference", reference);
@@ -76,7 +72,6 @@ public class BackgroundLocationService extends Service {
         intent.setPackage(getPackageName());
         sendBroadcast(intent);
     }
-
     private Notification createNotification() {
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Location Tracking Active")
@@ -85,7 +80,6 @@ public class BackgroundLocationService extends Service {
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build();
     }
-
     private void createNotificationChannel() {
         NotificationChannel serviceChannel = new NotificationChannel(
                 CHANNEL_ID, "Location Tracking", NotificationManager.IMPORTANCE_LOW);
@@ -94,10 +88,9 @@ public class BackgroundLocationService extends Service {
             manager.createNotificationChannel(serviceChannel);
         }
     }
-
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!hasLocationPermissions()) {
+        if (hasLocationPermissions()) {
             requestPermissionsManually();
             stopSelf(); // Stop service if permissions are missing
             return START_NOT_STICKY;
@@ -113,24 +106,20 @@ public class BackgroundLocationService extends Service {
         lastIndex = db.getNextIndexForReference(reference); // Resume index tracking safely
         return START_STICKY;
     }
-
     private void requestPermissionsManually() {
         Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
         intent.setData(Uri.parse("package:" + getPackageName()));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
     }
-
     private boolean hasLocationPermissions() {
-        return ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        return ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED;
     }
-
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
         return null;
     }
-
     @Override
     public void onDestroy() {
         super.onDestroy();
