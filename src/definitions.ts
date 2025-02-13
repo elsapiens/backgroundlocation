@@ -5,8 +5,11 @@ export interface LocationData {
   index: number;
   latitude: number;
   longitude: number;
+  altitude?: number;
+  speed?: number;
+  heading?: number;
   accuracy: number;
-  speed: number;
+  altitudeAccuracy?: number;
   timestamp: number;
 }
 

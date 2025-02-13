@@ -11,6 +11,7 @@ import android.location.Location;
 import android.net.Uri;
 import android.os.IBinder;
 import android.os.Looper;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -37,14 +38,17 @@ public class BackgroundLocationService extends Service {
             public void onLocationResult(@NonNull LocationResult locationResult) {
                 for (Location location : locationResult.getLocations()) {
                     lastIndex = db.getNextIndexForReference(reference); // Update the last index
-                    db.insertLocation(reference, lastIndex, location.getLatitude(), location.getLongitude(),
-                            location.getTime(),
-                            location.getAccuracy());
+                    db.insertLocation(reference, lastIndex, location.getLatitude(), location.getLongitude(), location.getAltitude(), location.getAccuracy(), location.getSpeed(), location.getBearing(), location.getVerticalAccuracyMeters(), location.getTime());
+                    Log.d("BackgroundLocation", "Location update: " + location.getLatitude() + ", " + location.getLongitude());
                     sendLocationUpdate(location, lastIndex);
                 }
             }
         };
-
+        if (hasLocationPermissions()) {
+            requestPermissionsManually();
+            stopSelf(); // Stop service if permissions are missing
+            return;
+        }
         startForeground(1, createNotification());
         requestLocationUpdates();
     }
@@ -67,7 +71,11 @@ public class BackgroundLocationService extends Service {
         intent.putExtra("index", index);
         intent.putExtra("latitude", location.getLatitude());
         intent.putExtra("longitude", location.getLongitude());
+        intent.putExtra("altitude", location.getAltitude());
+        intent.putExtra("speed", location.getSpeed());
+        intent.putExtra("heading", location.getBearing());
         intent.putExtra("accuracy", location.getAccuracy());
+        intent.putExtra("altitudeAccuracy", location.getVerticalAccuracyMeters());
         intent.putExtra("timestamp", location.getTime());
         intent.setPackage(getPackageName());
         sendBroadcast(intent);

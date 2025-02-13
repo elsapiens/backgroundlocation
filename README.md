@@ -106,15 +106,18 @@ getLastLocation({ reference }: { reference: string; }) => Promise<void>
 
 #### LocationData
 
-| Prop            | Type                |
-| --------------- | ------------------- |
-| **`reference`** | <code>string</code> |
-| **`index`**     | <code>number</code> |
-| **`latitude`**  | <code>number</code> |
-| **`longitude`** | <code>number</code> |
-| **`accuracy`**  | <code>number</code> |
-| **`speed`**     | <code>number</code> |
-| **`timestamp`** | <code>number</code> |
+| Prop                   | Type                |
+| ---------------------- | ------------------- |
+| **`reference`**        | <code>string</code> |
+| **`index`**            | <code>number</code> |
+| **`latitude`**         | <code>number</code> |
+| **`longitude`**        | <code>number</code> |
+| **`altitude`**         | <code>number</code> |
+| **`speed`**            | <code>number</code> |
+| **`heading`**          | <code>number</code> |
+| **`accuracy`**         | <code>number</code> |
+| **`altitudeAccuracy`** | <code>number</code> |
+| **`timestamp`**        | <code>number</code> |
 
 
 #### PluginListenerHandle

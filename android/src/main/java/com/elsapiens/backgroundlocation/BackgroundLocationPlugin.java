@@ -6,11 +6,13 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Looper;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
@@ -19,6 +21,8 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import com.google.android.gms.location.*;
 
 import android.hardware.Sensor;
@@ -26,14 +30,25 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 
 @CapacitorPlugin(name = "BackgroundLocation", permissions = {
-        @com.getcapacitor.annotation.Permission(alias = "location", strings = {
+        @Permission(alias = "foregroundLocation", strings = {
                 Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_BACKGROUND_LOCATION,
-                Manifest.permission.FOREGROUND_SERVICE,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+        }),
+        @Permission(alias = "foregroundLocationNew", strings = {
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
                 Manifest.permission.FOREGROUND_SERVICE_LOCATION
+        }),
+        @Permission(alias = "backgroundLocation", strings = {
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION
+        }),
+        @Permission(alias = "callPhone", strings = {
+                Manifest.permission.CALL_PHONE
         })
 })
 public class BackgroundLocationPlugin extends Plugin implements SensorEventListener {
+    private static final int FOREGROUND_LOCATION_REQUEST_CODE = 1001;
+    private static final int BACKGROUND_LOCATION_REQUEST_CODE = 1002;
     private static final String TAG = "BackgroundLocation";
     private  FusedLocationProviderClient fusedLocationClient;
     private LocationCallback locationCallback;
@@ -108,24 +123,22 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
             return;
         }
         currentReference = call.getString("reference");
-
-        if (ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.FOREGROUND_SERVICE) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(call);
-            return;
+        if (!hasLocationPermissions()) {
+            requestLocationPermissions(call);
+        }else if (!hasBackgroundLocationPermission()) {
+            requestBackgroundPermission(call);
+        }else{
+            executeStartTracking(call);
         }
 
-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.TIRAMISU) { // Android 14+
-            if (ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.FOREGROUND_SERVICE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(call);
-                return;
-            }
-        }
+    }
 
+    @PermissionCallback
+    private void executeStartTracking(PluginCall call) {
         Context context = getContext();
         Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
         serviceIntent.putExtra("reference", currentReference);
         context.startForegroundService(serviceIntent);
-
         isTrackingActive = true;
         call.resolve();
     }
@@ -192,8 +205,8 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     }
 
     public void saveToDatabase(Location location, String currentReference, int index) {
-        db.insertLocation(currentReference, index, location.getLatitude(), location.getLongitude(), location.getTime(),
-                location.getAccuracy());
+        db.insertLocation(currentReference, index, location.getLatitude(), location.getLongitude(), (float) location.getAltitude(),
+                location.getAccuracy(), location.getSpeed(), location.getBearing(), location.getVerticalAccuracyMeters(), location.getTime());
         lastLocation = location;
         Log.d(TAG, "Location Saved: " + location.getLatitude() + ", " + location.getLongitude() + " Accuracy: "
                 + location.getAccuracy());
@@ -206,7 +219,11 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         data.put("index", index);
         data.put("latitude", location.getLatitude());
         data.put("longitude", location.getLongitude());
+        data.put("altitude", location.getAltitude());
         data.put("accuracy", location.getAccuracy());
+        data.put("speed", location.getSpeed());
+        data.put("heading", location.getBearing());
+        data.put("altitudeAccuracy", location.getVerticalAccuracyMeters());
         data.put("timestamp", location.getTime());
         notifyListeners("locationUpdate", data);
     }
@@ -217,7 +234,11 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         data.put("index", location.index);
         data.put("latitude", location.latitude);
         data.put("longitude", location.longitude);
+        data.put("altitude", location.altitude);
         data.put("accuracy", location.accuracy);
+        data.put("speed", location.speed);
+        data.put("heading", location.heading);
+        data.put("altitudeAccuracy", location.altitudeAccuracy);
         data.put("timestamp", location.timestamp);
         notifyListeners("locationUpdate", data);
     }
@@ -287,4 +308,45 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
 
     @Override
     public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+
+    private boolean hasLocationPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                    ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                    ContextCompat.checkSelfPermission(getContext(), Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED ;
+        }else{
+            return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                    ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        }
+    }
+    private boolean hasBackgroundLocationPermission() {
+        return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+    @PermissionCallback
+    public void requestLocationPermissions(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            requestPermissionForAlias("foregroundLocationNew", call, "requestBackgroundPermission");
+        }else {
+            requestPermissionForAlias("foregroundLocation", call, "requestBackgroundPermission");
+        }
+    }
+    @PermissionCallback
+    private void requestBackgroundPermission(PluginCall call) {
+        requestPermissionForAlias("backgroundLocation", call, "executeStartTracking");
+    }
+
+    // Show instructions if background location is denied
+    private void showManualBackgroundLocationInstructions() {
+        new AlertDialog.Builder(getActivity())
+                .setTitle("Background Location Required")
+                .setMessage("To enable background location, go to:\nSettings > Apps > Your App > Permissions > Location > Allow All the Time.")
+                .setPositiveButton("Open Settings", (dialog, which) -> {
+                    Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                    intent.setData(Uri.parse("package:" + getActivity().getPackageName()));
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    getActivity().startActivity(intent);
+                })
+                .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+                .show();
+    }
 }

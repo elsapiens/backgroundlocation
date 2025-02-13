@@ -21,31 +21,37 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
     @Override
     public void onCreate(SQLiteDatabase db) {
         String createTable = "CREATE TABLE " + TABLE_NAME + " ("
-                + "id INTEGER PRIMARY KEY, "
-                + "reference TEXT, "
-                + "idx INTEGER, "
-                + "latitude DOUBLE, "
-                + "longitude DOUBLE, "
-                + "accuracy FLOAT, " // Added accuracy column
-                + "timestamp LONG)";
+                + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                + "reference TEXT,"
+                + "idx INTEGER,"
+                + "latitude REAL,"
+                + "longitude REAL,"
+                + "altitude REAL,"
+                + "accuracy REAL,"
+                + "speed REAL,"
+                + "heading REAL,"
+                + "altitudeAccuracy REAL,"
+                + "timestamp INTEGER"
+                + ")";
         db.execSQL(createTable);
     }
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        if (oldVersion < 2) { // Upgrade logic for adding accuracy column
-            db.execSQL("ALTER TABLE " + TABLE_NAME + " ADD COLUMN accuracy FLOAT DEFAULT 0");
-        }
     }
 
-    public void insertLocation(String reference, int index, double latitude, double longitude, long timestamp, float accuracy) {
+    public void insertLocation(String reference, int index, double latitude, double longitude, double altitude, float accuracy, float speed, float heading, float altitudeAccuracy, long timestamp) {
         SQLiteDatabase db = this.getWritableDatabase();
         ContentValues values = new ContentValues();
         values.put("reference", reference);
         values.put("idx", index);
         values.put("latitude", latitude);
         values.put("longitude", longitude);
+        values.put("altitude", altitude);
         values.put("accuracy", accuracy);
+        values.put("speed", speed);
+        values.put("heading", heading);
+        values.put("altitudeAccuracy", altitudeAccuracy);
         values.put("timestamp", timestamp);
         db.insert(TABLE_NAME, null, values);
         db.close();
@@ -61,9 +67,12 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
                     cursor.getInt(2),
                     cursor.getDouble(3),
                     cursor.getDouble(4),
-                    cursor.getFloat(5), // Added accuracy
-                    0, // Added speed
-                    cursor.getLong(6)
+                    cursor.getFloat(5),
+                    cursor.getLong(6),
+                    cursor.getFloat(7),
+                    cursor.getFloat(8),
+                    cursor.getFloat(9),
+                    cursor.getLong(10)
             );
         }
         cursor.close();
@@ -96,11 +105,15 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
                 JSONObject location = new JSONObject();
                 try {
                     location.put("reference", cursor.getString(1));
-                    location.put("idx", cursor.getInt(2));
+                    location.put("index", cursor.getInt(2));
                     location.put("latitude", cursor.getDouble(3));
                     location.put("longitude", cursor.getDouble(4));
-                    location.put("accuracy", cursor.getFloat(5)); // Added accuracy
-                    location.put("timestamp", cursor.getLong(6));
+                    location.put("altitude", cursor.getDouble(5));
+                    location.put("accuracy", cursor.getFloat(6));
+                    location.put("speed", cursor.getFloat(7));
+                    location.put("heading", cursor.getFloat(8));
+                    location.put("altitudeAccuracy", cursor.getFloat(9));
+                    location.put("timestamp", cursor.getLong(10));
                     locations.put(location);
                 } catch (Exception ignored) {}
             } while (cursor.moveToNext());
