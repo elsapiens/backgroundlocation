@@ -224,6 +224,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         data.put("speed", location.getSpeed());
         data.put("heading", location.getBearing());
         data.put("altitudeAccuracy", location.getVerticalAccuracyMeters());
+        data.put("totalDistance", db.getTotalDistanceForReference(currentReference));
         data.put("timestamp", location.getTime());
         notifyListeners("locationUpdate", data);
     }
@@ -239,6 +240,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         data.put("speed", location.speed);
         data.put("heading", location.heading);
         data.put("altitudeAccuracy", location.altitudeAccuracy);
+        data.put("totalDistance", db.getTotalDistanceForReference(location.reference));
         data.put("timestamp", location.timestamp);
         notifyListeners("locationUpdate", data);
     }

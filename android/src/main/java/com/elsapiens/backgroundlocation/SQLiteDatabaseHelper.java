@@ -5,6 +5,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.content.ContentValues;
 import android.database.Cursor;
+import android.location.Location;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -129,5 +130,34 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
             db.execSQL("DELETE FROM " + TABLE_NAME);
             db.close();
         } catch (Exception ignored) {}
+    }
+
+    public float getTotalDistanceForReference(String reference) {
+        float distance = 0;
+        SQLiteDatabase db = this.getReadableDatabase();
+        Cursor cursor = db.rawQuery("SELECT latitude, longitude" +
+                " FROM " + TABLE_NAME + " WHERE reference = ? ORDER BY idx ASC", new String[]{reference});
+        //use haversine formula to calculate distance between two points
+        if (cursor.moveToFirst()) {
+            double lat1 = cursor.getDouble(0);
+            double lon1 = cursor.getDouble(1);
+            while (cursor.moveToNext()) {
+                double lat2 = cursor.getDouble(0);
+                double lon2 = cursor.getDouble(1);
+                double R = 6371; // Radius of the earth in km
+                double dLat = Math.toRadians(lat2 - lat1);
+                double dLon = Math.toRadians(lon2 - lon1);
+                double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                        Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                distance += (float) (R * c);
+                lat1 = lat2;
+                lon1 = lon2;
+            }
+        }
+        cursor.close();
+        db.close();
+        return distance;
     }
 }

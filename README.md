@@ -117,6 +117,7 @@ getLastLocation({ reference }: { reference: string; }) => Promise<void>
 | **`heading`**          | <code>number</code> |
 | **`accuracy`**         | <code>number</code> |
 | **`altitudeAccuracy`** | <code>number</code> |
+| **`totalDistance`**    | <code>number</code> |
 | **`timestamp`**        | <code>number</code> |
 
 

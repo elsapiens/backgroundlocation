@@ -26,6 +26,8 @@ public class BackgroundLocationService extends Service {
     private SQLiteDatabaseHelper db;
     private String reference; // Store reference passed from the plugin
     private int lastIndex = 0; // Track the last index
+    private Location lastLocation = null; // Keep track of the last location
+    private float totalDistance = 0; // Distance traveled
     @Override
     public void onCreate() {
         super.onCreate();
@@ -38,9 +40,16 @@ public class BackgroundLocationService extends Service {
             public void onLocationResult(@NonNull LocationResult locationResult) {
                 for (Location location : locationResult.getLocations()) {
                     lastIndex = db.getNextIndexForReference(reference); // Update the last index
+                    if (lastLocation != null) {
+                        totalDistance += lastLocation.distanceTo(location);
+                    }
+                    if(location.getAccuracy() > 30) {
+                        continue; // Skip inaccurate locations
+                    }
+                    lastLocation = location;
                     db.insertLocation(reference, lastIndex, location.getLatitude(), location.getLongitude(), location.getAltitude(), location.getAccuracy(), location.getSpeed(), location.getBearing(), location.getVerticalAccuracyMeters(), location.getTime());
                     Log.d("BackgroundLocation", "Location update: " + location.getLatitude() + ", " + location.getLongitude());
-                    sendLocationUpdate(location, lastIndex);
+                    sendLocationUpdate(location, lastIndex, totalDistance);
                 }
             }
         };
@@ -65,7 +74,7 @@ public class BackgroundLocationService extends Service {
         }
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
     }
-    private void sendLocationUpdate(Location location, int index) {
+    private void sendLocationUpdate(Location location, int index, float totalDistance) {
         Intent intent = new Intent("BackgroundLocationUpdate");
         intent.putExtra("reference", reference);
         intent.putExtra("index", index);
@@ -76,6 +85,7 @@ public class BackgroundLocationService extends Service {
         intent.putExtra("heading", location.getBearing());
         intent.putExtra("accuracy", location.getAccuracy());
         intent.putExtra("altitudeAccuracy", location.getVerticalAccuracyMeters());
+        intent.putExtra("totalDistance", totalDistance);
         intent.putExtra("timestamp", location.getTime());
         intent.setPackage(getPackageName());
         sendBroadcast(intent);

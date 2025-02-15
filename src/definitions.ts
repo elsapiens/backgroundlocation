@@ -10,6 +10,7 @@ export interface LocationData {
   heading?: number;
   accuracy: number;
   altitudeAccuracy?: number;
+  totalDistance?: number;
   timestamp: number;
 }
 
