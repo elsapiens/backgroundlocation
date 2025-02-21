@@ -12,6 +12,7 @@ public class LocationBroadcastReceiver extends BroadcastReceiver {
 
 
     public LocationBroadcastReceiver() {
+
     }
 
     @Override
@@ -31,13 +32,23 @@ public class LocationBroadcastReceiver extends BroadcastReceiver {
             LocationBroadcastReceiver.sendUpdateToCapacitor(locationItem, context);
 
         }
+        if ("BackgroundLocationDisabled".equals(intent.getAction())) {
+            LocationBroadcastReceiver.sendDisabledToCapacitor(context);
+        }
     }
     private static void sendUpdateToCapacitor(LocationItem locationItem, Context context) {
         BackgroundLocationPlugin pluginInstance = BackgroundLocationPlugin.getInstance();
         if (pluginInstance != null) {
-
-
             pluginInstance.pushUpdateToCapacitor(locationItem);
+        } else {
+            Log.e(TAG, "Plugin instance is null, cannot send event to Angular.");
+        }
+    }
+
+    private static void sendDisabledToCapacitor(Context context) {
+        BackgroundLocationPlugin pluginInstance = BackgroundLocationPlugin.getInstance();
+        if (pluginInstance != null) {
+            pluginInstance.pushDisabledToCapacitor(false);
         } else {
             Log.e(TAG, "Plugin instance is null, cannot send event to Angular.");
         }

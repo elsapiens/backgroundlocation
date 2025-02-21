@@ -17,6 +17,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
+
+import com.google.android.gms.common.api.ResolvableApiException;
 import com.google.android.gms.location.*;
 
 public class BackgroundLocationService extends Service {
@@ -38,6 +40,11 @@ public class BackgroundLocationService extends Service {
         locationCallback = new LocationCallback() {
             @Override
             public void onLocationResult(@NonNull LocationResult locationResult) {
+                if (!isLocationEnabled()) {
+                  sendLocationDisabledBroadcast();
+                  stopSelf(); // Stop the service if location is disabled
+                  return;
+                }
                 for (Location location : locationResult.getLocations()) {
                     lastIndex = db.getNextIndexForReference(reference); // Update the last index
                     if (lastLocation != null) {
@@ -62,6 +69,10 @@ public class BackgroundLocationService extends Service {
         requestLocationUpdates();
     }
     private void requestLocationUpdates() {
+      if (!isLocationEnabled()) {
+        sendLocationDisabledBroadcast(); // Notify the app about the issue
+        return;
+      }
         if (hasLocationPermissions()) {
             requestPermissionsManually();
             return;
@@ -74,6 +85,31 @@ public class BackgroundLocationService extends Service {
         }
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
     }
+
+  private void checkLocationSettings() {
+    LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000).build();
+    LocationSettingsRequest.Builder builder = new LocationSettingsRequest.Builder().addLocationRequest(locationRequest);
+
+    SettingsClient settingsClient = LocationServices.getSettingsClient(this);
+    settingsClient.checkLocationSettings(builder.build())
+      .addOnFailureListener(exception -> {
+        if (exception instanceof ResolvableApiException) {
+          Log.e("BackgroundLocation", "Location settings are not satisfied.");
+          sendLocationDisabledBroadcast();
+        }
+      });
+  }
+
+  private void sendLocationDisabledBroadcast() {
+    Intent intent = new Intent("BackgroundLocationDisabled");
+    intent.setPackage(getPackageName());
+    sendBroadcast(intent);
+  }
+  private boolean isLocationEnabled() {
+    android.location.LocationManager locationManager = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+    return locationManager != null && (locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
+      locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER));
+  }
     private void sendLocationUpdate(Location location, int index, float totalDistance) {
         Intent intent = new Intent("BackgroundLocationUpdate");
         intent.putExtra("reference", reference);

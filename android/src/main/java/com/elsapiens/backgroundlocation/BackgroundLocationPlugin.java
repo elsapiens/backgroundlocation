@@ -63,7 +63,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     private static BackgroundLocationPlugin instance;
 
     public BackgroundLocationPlugin() {
-        instance = this; // ✅ Save instance for use in static methods
+        instance = this;
     }
 
     public static BackgroundLocationPlugin getInstance() {
@@ -81,7 +81,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         locationReceiver = new LocationBroadcastReceiver();
         IntentFilter filter = new IntentFilter("BackgroundLocationUpdate");
         ContextCompat.registerReceiver(context, locationReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
-        Log.d(TAG, "📡 LocationBroadcastReceiver Registered");
+        Log.d(TAG, "LocationBroadcastReceiver Registered");
     }
 
     @Override
@@ -90,7 +90,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         Context context = getContext();
         if (locationReceiver != null) {
             context.unregisterReceiver(locationReceiver);
-            Log.d(TAG, "📡 LocationBroadcastReceiver Unregistered");
+            Log.d(TAG,  "LocationBroadcastReceiver Unregistered");
         }
     }
 
@@ -243,6 +243,13 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         data.put("totalDistance", db.getTotalDistanceForReference(location.reference));
         data.put("timestamp", location.timestamp);
         notifyListeners("locationUpdate", data);
+    }
+
+    public void pushDisabledToCapacitor(boolean Boolean) {
+        JSObject data = new JSObject();
+        data.put("message", "Location has been disabled by the user.");
+        data.put("locationActive", status);
+        notifyListeners("locationStatus", data);
     }
 
     @PluginMethod
