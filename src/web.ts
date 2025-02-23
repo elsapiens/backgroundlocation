@@ -11,6 +11,12 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
   constructor() {
     super(); 
   }
+  startLocationStatusTracking(): Promise<void> {
+    return Promise.resolve();
+  }
+  stopLocationStatusTracking(): Promise<void> {
+    return Promise.resolve();
+  }
 
   async startTracking({ reference }: { reference: string }): Promise<void> {
     this.reference = reference;
@@ -42,6 +48,7 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
     }
     
   }
+
 
   private simulateLocationTracking(): void {
     if (!this.tracking) return;

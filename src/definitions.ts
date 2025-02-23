@@ -26,6 +26,12 @@ export interface BackgroundLocationPlugin {
 
   addListener(eventName: 'locationUpdate', listenerFunc: (data: LocationData) => void): Promise<PluginListenerHandle>;
 
+  addListener(eventName: 'locationStatus', listenerFunc: (status: { enabled: boolean }) => void): Promise<PluginListenerHandle>;
+
   getLastLocation({reference}: {reference: string}): Promise<void>;
+
+  startLocationStatusTracking(): Promise<void>;
+
+  stopLocationStatusTracking(): Promise<void>;
 
 }

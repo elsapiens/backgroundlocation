@@ -41,7 +41,8 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
     }
 
-    public void insertLocation(String reference, int index, double latitude, double longitude, double altitude, float accuracy, float speed, float heading, float altitudeAccuracy, long timestamp) {
+    public void insertLocation(String reference, int index, double latitude, double longitude, double altitude,
+            float accuracy, float speed, float heading, float altitudeAccuracy, long timestamp) {
         SQLiteDatabase db = this.getWritableDatabase();
         ContentValues values = new ContentValues();
         values.put("reference", reference);
@@ -60,7 +61,8 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
 
     public LocationItem getLastLocation(String reference) {
         SQLiteDatabase db = this.getReadableDatabase();
-        Cursor cursor = db.rawQuery("SELECT * FROM " + TABLE_NAME + " WHERE reference = ? ORDER BY idx DESC LIMIT 1", new String[]{reference});
+        Cursor cursor = db.rawQuery("SELECT * FROM " + TABLE_NAME + " WHERE reference = ? ORDER BY idx DESC LIMIT 1",
+                new String[] { reference });
         LocationItem location = null;
         if (cursor.moveToFirst()) {
             location = new LocationItem(
@@ -73,8 +75,7 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
                     cursor.getFloat(7),
                     cursor.getFloat(8),
                     cursor.getFloat(9),
-                    cursor.getLong(10)
-            );
+                    cursor.getLong(10));
         }
         cursor.close();
         db.close();
@@ -86,7 +87,8 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
             reference = "default_reference"; // Ensure a non-null reference
         }
         SQLiteDatabase db = this.getReadableDatabase();
-        Cursor cursor = db.rawQuery("SELECT MAX(idx) FROM " + TABLE_NAME + " WHERE reference = ?", new String[]{reference});
+        Cursor cursor = db.rawQuery("SELECT MAX(idx) FROM " + TABLE_NAME + " WHERE reference = ?",
+                new String[] { reference });
 
         int index = 1;
         if (cursor.moveToFirst() && !cursor.isNull(0)) {
@@ -100,7 +102,8 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
     public JSONArray getLocationsForReference(String reference) {
         JSONArray locations = new JSONArray();
         SQLiteDatabase db = this.getReadableDatabase();
-        Cursor cursor = db.rawQuery("SELECT * FROM " + TABLE_NAME + " WHERE reference = ? ORDER BY idx ASC", new String[]{reference});
+        Cursor cursor = db.rawQuery("SELECT * FROM " + TABLE_NAME + " WHERE reference = ? ORDER BY idx ASC",
+                new String[] { reference });
         if (cursor.moveToFirst()) {
             do {
                 JSONObject location = new JSONObject();
@@ -116,7 +119,8 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
                     location.put("altitudeAccuracy", cursor.getFloat(9));
                     location.put("timestamp", cursor.getLong(10));
                     locations.put(location);
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             } while (cursor.moveToNext());
         }
         cursor.close();
@@ -129,15 +133,16 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
             SQLiteDatabase db = getWritableDatabase();
             db.execSQL("DELETE FROM " + TABLE_NAME);
             db.close();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public float getTotalDistanceForReference(String reference) {
         float distance = 0;
         SQLiteDatabase db = this.getReadableDatabase();
         Cursor cursor = db.rawQuery("SELECT latitude, longitude" +
-                " FROM " + TABLE_NAME + " WHERE reference = ? ORDER BY idx ASC", new String[]{reference});
-        //use haversine formula to calculate distance between two points
+                " FROM " + TABLE_NAME + " WHERE reference = ? ORDER BY idx ASC", new String[] { reference });
+        // use haversine formula to calculate distance between two points
         if (cursor.moveToFirst()) {
             double lat1 = cursor.getDouble(0);
             double lon1 = cursor.getDouble(1);

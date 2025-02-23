@@ -10,7 +10,6 @@ import com.getcapacitor.JSObject;
 public class LocationBroadcastReceiver extends BroadcastReceiver {
     private static final String TAG = "LocationBroadcastReceiver";
 
-
     public LocationBroadcastReceiver() {
 
     }
@@ -28,7 +27,8 @@ public class LocationBroadcastReceiver extends BroadcastReceiver {
             float heading = intent.getFloatExtra("heading", 0);
             float altitudeAccuracy = intent.getFloatExtra("altitudeAccuracy", 0);
             long timestamp = intent.getLongExtra("timestamp", 0);
-            LocationItem locationItem = new LocationItem(reference, index, latitude, longitude, altitude, accuracy, speed, heading, altitudeAccuracy, timestamp);
+            LocationItem locationItem = new LocationItem(reference, index, latitude, longitude, altitude, accuracy,
+                    speed, heading, altitudeAccuracy, timestamp);
             LocationBroadcastReceiver.sendUpdateToCapacitor(locationItem, context);
 
         }
@@ -36,21 +36,22 @@ public class LocationBroadcastReceiver extends BroadcastReceiver {
             LocationBroadcastReceiver.sendDisabledToCapacitor(context);
         }
     }
+
     private static void sendUpdateToCapacitor(LocationItem locationItem, Context context) {
         BackgroundLocationPlugin pluginInstance = BackgroundLocationPlugin.getInstance();
         if (pluginInstance != null) {
             pluginInstance.pushUpdateToCapacitor(locationItem);
         } else {
-            Log.e(TAG, "Plugin instance is null, cannot send event to Angular.");
+            Log.e(TAG, "Plugin instance is null, cannot send event to Capacitor.");
         }
     }
 
     private static void sendDisabledToCapacitor(Context context) {
         BackgroundLocationPlugin pluginInstance = BackgroundLocationPlugin.getInstance();
         if (pluginInstance != null) {
-            pluginInstance.pushDisabledToCapacitor(false);
+            pluginInstance.pushLocationStateToCapacitor(false);
         } else {
-            Log.e(TAG, "Plugin instance is null, cannot send event to Angular.");
+            Log.e(TAG, "Plugin instance is null, cannot send event to Capacitor.");
         }
     }
 }

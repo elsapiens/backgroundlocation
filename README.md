@@ -18,7 +18,10 @@ npx cap sync
 * [`getStoredLocations(...)`](#getstoredlocations)
 * [`clearStoredLocations()`](#clearstoredlocations)
 * [`addListener('locationUpdate', ...)`](#addlistenerlocationupdate-)
+* [`addListener('locationStatus', ...)`](#addlistenerlocationstatus-)
 * [`getLastLocation(...)`](#getlastlocation)
+* [`startLocationStatusTracking()`](#startlocationstatustracking)
+* [`stopLocationStatusTracking()`](#stoplocationstatustracking)
 * [Interfaces](#interfaces)
 
 </docgen-index>
@@ -88,6 +91,22 @@ addListener(eventName: 'locationUpdate', listenerFunc: (data: LocationData) => v
 --------------------
 
 
+### addListener('locationStatus', ...)
+
+```typescript
+addListener(eventName: 'locationStatus', listenerFunc: (status: { enabled: boolean; }) => void) => Promise<PluginListenerHandle>
+```
+
+| Param              | Type                                                    |
+| ------------------ | ------------------------------------------------------- |
+| **`eventName`**    | <code>'locationStatus'</code>                           |
+| **`listenerFunc`** | <code>(status: { enabled: boolean; }) =&gt; void</code> |
+
+**Returns:** <code>Promise&lt;<a href="#pluginlistenerhandle">PluginListenerHandle</a>&gt;</code>
+
+--------------------
+
+
 ### getLastLocation(...)
 
 ```typescript
@@ -97,6 +116,24 @@ getLastLocation({ reference }: { reference: string; }) => Promise<void>
 | Param     | Type                                |
 | --------- | ----------------------------------- |
 | **`__0`** | <code>{ reference: string; }</code> |
+
+--------------------
+
+
+### startLocationStatusTracking()
+
+```typescript
+startLocationStatusTracking() => Promise<void>
+```
+
+--------------------
+
+
+### stopLocationStatusTracking()
+
+```typescript
+stopLocationStatusTracking() => Promise<void>
+```
 
 --------------------
 

@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Looper;
@@ -29,6 +30,8 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 
+import org.json.JSONException;
+
 @CapacitorPlugin(name = "BackgroundLocation", permissions = {
         @Permission(alias = "foregroundLocation", strings = {
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -50,9 +53,9 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     private static final int FOREGROUND_LOCATION_REQUEST_CODE = 1001;
     private static final int BACKGROUND_LOCATION_REQUEST_CODE = 1002;
     private static final String TAG = "BackgroundLocation";
-    private  FusedLocationProviderClient fusedLocationClient;
+    private FusedLocationProviderClient fusedLocationClient;
     private LocationCallback locationCallback;
-    private  SQLiteDatabaseHelper db;
+    private SQLiteDatabaseHelper db;
     private String currentReference;
     private Location lastLocation;
     private boolean isMoving = false;
@@ -61,6 +64,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     private long lastMovementTime = 0;
     private LocationBroadcastReceiver locationReceiver;
     private static BackgroundLocationPlugin instance;
+    private LocationStateReceiver locationStateReceiver;
 
     public BackgroundLocationPlugin() {
         instance = this;
@@ -90,21 +94,29 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         Context context = getContext();
         if (locationReceiver != null) {
             context.unregisterReceiver(locationReceiver);
-            Log.d(TAG,  "LocationBroadcastReceiver Unregistered");
+            Log.d(TAG, "LocationBroadcastReceiver Unregistered");
         }
+      if (locationStateReceiver != null) {
+        try {
+          context.unregisterReceiver(locationStateReceiver);
+        } catch (IllegalArgumentException e) {
+          Log.e("BackgroundLocation", "Receiver not registered or already unregistered.");
+        } catch (Exception e) {
+          Log.e("BackgroundLocation", "Failed to unregister receiver.");
+        }
+      }
     }
-
 
     @Override
     protected void handleOnResume() {
         super.handleOnResume();
         Log.d(TAG, "App Resumed - Pushing Latest Location " + currentReference);
         if (currentReference != null) {
-            pushLatestLocationToAngular(currentReference); // Send latest location to Angular when the app resumes
+            pushLatestLocationToCapacitor(currentReference); // Send latest location to Capacitor when the app resumes
         }
     }
 
-    private void pushLatestLocationToAngular(String reference) {
+    private void pushLatestLocationToCapacitor(String reference) {
         LocationItem location = db.getLastLocation(reference);
         if (location != null) {
             pushUpdateToCapacitor(location);
@@ -114,7 +126,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     @PluginMethod
     public void startTracking(PluginCall call) {
 
-        //check if already tracking
+        // check if already tracking
         if (isTrackingActive) {
             stopLocationUpdates();
         }
@@ -125,12 +137,49 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         currentReference = call.getString("reference");
         if (!hasLocationPermissions()) {
             requestLocationPermissions(call);
-        }else if (!hasBackgroundLocationPermission()) {
+        } else if (!hasBackgroundLocationPermission()) {
             requestBackgroundPermission(call);
-        }else{
+        } else {
             executeStartTracking(call);
         }
 
+    }
+
+    public JSObject isLocationEnabled() {
+        LocationManager locationManager = (LocationManager) getContext().getSystemService(Context.LOCATION_SERVICE);
+        boolean isLocationEnabled = locationManager != null && (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
+        JSObject data = new JSObject();
+        data.put("enabled", isLocationEnabled);
+        return data;
+    }
+
+    @PluginMethod
+    @PermissionCallback
+    public void startLocationStatusTracking(PluginCall call) {
+      if(!hasLocationPermissions()){
+        requestLocationStatusPermissions(call);
+      }
+      else if (locationStateReceiver == null) {
+            locationStateReceiver = new LocationStateReceiver();
+            IntentFilter filter = new IntentFilter(LocationManager.PROVIDERS_CHANGED_ACTION);
+            getContext().registerReceiver(locationStateReceiver, filter);
+        }
+      try {
+        pushLocationStateToCapacitor(isLocationEnabled().getBoolean("enabled"));
+      } catch (JSONException e) {
+        pushLocationStateToCapacitor(false);
+      }
+      call.resolve();
+    }
+
+    @PluginMethod
+    public void stopLocationStatusTracking(PluginCall call) {
+        if (locationStateReceiver != null) {
+            getContext().unregisterReceiver(locationStateReceiver);
+            locationStateReceiver = null;
+        }
+        call.resolve();
     }
 
     @PermissionCallback
@@ -160,7 +209,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
             return;
         }
         String reference = call.getString("reference");
-        pushLatestLocationToAngular(reference);
+        pushLatestLocationToCapacitor(reference);
     }
 
     private void requestLocationUpdate() {
@@ -205,8 +254,10 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     }
 
     public void saveToDatabase(Location location, String currentReference, int index) {
-        db.insertLocation(currentReference, index, location.getLatitude(), location.getLongitude(), (float) location.getAltitude(),
-                location.getAccuracy(), location.getSpeed(), location.getBearing(), location.getVerticalAccuracyMeters(), location.getTime());
+        db.insertLocation(currentReference, index, location.getLatitude(), location.getLongitude(),
+                (float) location.getAltitude(),
+                location.getAccuracy(), location.getSpeed(), location.getBearing(),
+                location.getVerticalAccuracyMeters(), location.getTime());
         lastLocation = location;
         Log.d(TAG, "Location Saved: " + location.getLatitude() + ", " + location.getLongitude() + " Accuracy: "
                 + location.getAccuracy());
@@ -245,10 +296,9 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         notifyListeners("locationUpdate", data);
     }
 
-    public void pushDisabledToCapacitor(boolean Boolean) {
+    public void pushLocationStateToCapacitor(boolean status) {
         JSObject data = new JSObject();
-        data.put("message", "Location has been disabled by the user.");
-        data.put("locationActive", status);
+        data.put("enabled", status);
         notifyListeners("locationStatus", data);
     }
 
@@ -316,29 +366,48 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     }
 
     @Override
-    public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+    }
 
     private boolean hasLocationPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-                    ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-                    ContextCompat.checkSelfPermission(getContext(), Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED ;
-        }else{
-            return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-                    ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+            return ContextCompat.checkSelfPermission(getContext(),
+                    Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                    ContextCompat.checkSelfPermission(getContext(),
+                            Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    &&
+                    ContextCompat.checkSelfPermission(getContext(),
+                            Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        } else {
+            return ContextCompat.checkSelfPermission(getContext(),
+                    Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                    ContextCompat.checkSelfPermission(getContext(),
+                            Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
         }
     }
+
     private boolean hasBackgroundLocationPermission() {
-        return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        return ContextCompat.checkSelfPermission(getContext(),
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED;
     }
+
     @PermissionCallback
     public void requestLocationPermissions(PluginCall call) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             requestPermissionForAlias("foregroundLocationNew", call, "requestBackgroundPermission");
-        }else {
+        } else {
             requestPermissionForAlias("foregroundLocation", call, "requestBackgroundPermission");
         }
     }
+  @PermissionCallback
+  public void requestLocationStatusPermissions(PluginCall call) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      requestPermissionForAlias("foregroundLocationNew", call, "startLocationStatusTracking");
+    } else {
+      requestPermissionForAlias("foregroundLocation", call, "startLocationStatusTracking");
+    }
+  }
+
     @PermissionCallback
     private void requestBackgroundPermission(PluginCall call) {
         requestPermissionForAlias("backgroundLocation", call, "executeStartTracking");
@@ -348,7 +417,8 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     private void showManualBackgroundLocationInstructions() {
         new AlertDialog.Builder(getActivity())
                 .setTitle("Background Location Required")
-                .setMessage("To enable background location, go to:\nSettings > Apps > Your App > Permissions > Location > Allow All the Time.")
+                .setMessage(
+                        "To enable background location, go to:\nSettings > Apps > Your App > Permissions > Location > Allow All the Time.")
                 .setPositiveButton("Open Settings", (dialog, which) -> {
                     Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
                     intent.setData(Uri.parse("package:" + getActivity().getPackageName()));
