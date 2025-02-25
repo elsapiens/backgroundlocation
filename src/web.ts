@@ -9,9 +9,12 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
   private reference = 'my-tracking';
 
   constructor() {
-    super(); 
+    super();
   }
   startLocationStatusTracking(): Promise<void> {
+    setTimeout(() => {
+      this.notifyListeners('locationStatus', { enabled: true });
+    }, 10);
     return Promise.resolve();
   }
   stopLocationStatusTracking(): Promise<void> {
@@ -29,7 +32,7 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = null;
-  }
+    }
   }
 
   async getStoredLocations({ reference }: { reference: string }): Promise<{ locations: LocationData[] }> {
@@ -46,9 +49,7 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
       const lastLocation = locations[locations.length - 1];
       this.notifyListeners('locationUpdate', lastLocation);
     }
-    
   }
-
 
   private simulateLocationTracking(): void {
     if (!this.tracking) return;
