@@ -32,12 +32,12 @@ npx cap sync
 ### startTracking(...)
 
 ```typescript
-startTracking({ reference }: { reference: string; }) => Promise<void>
+startTracking({ reference, highAccuracy, minDistance, interval }: { reference: string; highAccuracy: boolean; minDistance: number; interval: number; }) => Promise<void>
 ```
 
-| Param     | Type                                |
-| --------- | ----------------------------------- |
-| **`__0`** | <code>{ reference: string; }</code> |
+| Param     | Type                                                                                              |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| **`__0`** | <code>{ reference: string; highAccuracy: boolean; minDistance: number; interval: number; }</code> |
 
 --------------------
 

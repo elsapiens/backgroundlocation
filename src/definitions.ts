@@ -16,7 +16,7 @@ export interface LocationData {
 
 export interface BackgroundLocationPlugin {
 
-  startTracking({reference}: {reference: string}): Promise<void>;
+  startTracking({reference, highAccuracy, minDistance, interval }: {reference: string, highAccuracy: boolean, minDistance: number, interval: number}): Promise<void>;
 
   stopTracking(): Promise<void>;
 

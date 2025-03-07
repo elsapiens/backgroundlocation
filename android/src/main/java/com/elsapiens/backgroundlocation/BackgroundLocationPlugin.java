@@ -73,6 +73,9 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
     public static BackgroundLocationPlugin getInstance() {
         return instance;
     }
+    private boolean highAccuracy = true;
+    private long interval = 3000;
+    private float minDistance = 10;
 
     @Override
     public void load() {
@@ -125,7 +128,6 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
 
     @PluginMethod
     public void startTracking(PluginCall call) {
-
         // check if already tracking
         if (isTrackingActive) {
             stopLocationUpdates();
@@ -134,7 +136,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
             call.reject("Missing 'reference' parameter.");
             return;
         }
-        currentReference = call.getString("reference");
+
         if (!hasLocationPermissions()) {
             requestLocationPermissions(call);
         } else if (!hasBackgroundLocationPermission()) {
@@ -142,7 +144,6 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         } else {
             executeStartTracking(call);
         }
-
     }
 
     public JSObject isLocationEnabled() {
@@ -184,9 +185,18 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
 
     @PermissionCallback
     private void executeStartTracking(PluginCall call) {
+        // 🚀 Start tracking
+        long interval = call.getLong("interval", (long) 3000.00); // Default to 3000ms
+        float minDistance = call.getFloat("minDistance", 10.00F); // Default to 10 meters
+        boolean highAccuracy = call.getBoolean("highAccuracy", true); // Default to high accuracy
+        currentReference = call.getString("reference");
+        // 🚀 Request location updates
         Context context = getContext();
         Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
         serviceIntent.putExtra("reference", currentReference);
+        serviceIntent.putExtra("interval", interval);
+        serviceIntent.putExtra("minDistance", minDistance);
+        serviceIntent.putExtra("highAccuracy", highAccuracy);
         context.startForegroundService(serviceIntent);
         isTrackingActive = true;
         call.resolve();
@@ -212,13 +222,16 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         pushLatestLocationToCapacitor(reference);
     }
 
-    private void requestLocationUpdate() {
+    private void requestLocationUpdate(long interval, float minDistance, boolean highAccuracy) {
         LocationRequest locationRequest = new LocationRequest.Builder(
-                Priority.PRIORITY_HIGH_ACCURACY,
-                3000).setMinUpdateDistanceMeters(10)
+                highAccuracy ? Priority.PRIORITY_HIGH_ACCURACY : Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                interval)
+                .setMinUpdateDistanceMeters(minDistance)
                 .setWaitForAccurateLocation(true)
                 .build();
-
+        this.interval = interval;
+        this.minDistance = minDistance;
+        this.highAccuracy = highAccuracy;
         locationCallback = new LocationCallback() {
             @Override
             public void onLocationResult(@NonNull LocationResult locationResult) {
@@ -231,7 +244,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
                 }
             }
         };
-
+    
         if (ActivityCompat.checkSelfPermission(getContext(),
                 Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return;
@@ -349,7 +362,7 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
                 // 🚀 If movement is detected and tracking is inactive, restart location updates
                 if (!isTrackingActive) {
                     Log.d(TAG, "User started moving. Restarting location tracking.");
-                    requestLocationUpdate();
+                    requestLocationUpdate(interval, minDistance, highAccuracy);
                     isTrackingActive = true;
                 }
             } else {

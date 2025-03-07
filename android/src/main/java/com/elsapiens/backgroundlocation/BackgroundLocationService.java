@@ -32,6 +32,9 @@ public class BackgroundLocationService extends Service {
   private int lastIndex = 0; // Track the last index
   private Location lastLocation = null; // Keep track of the last location
   private float totalDistance = 0; // Distance traveled
+  private long interval = 3000; // Default to 3000ms
+  private float minDistance = 10; // Default to 10 meters
+  private boolean highAccuracy = true; // Default to high accuracy
 
   @Override
   public void onCreate() {
@@ -87,29 +90,31 @@ public class BackgroundLocationService extends Service {
       stopSelf(); // Stop service if permissions are missing
       return;
     }
-    requestLocationUpdates();
+    requestLocationUpdates(interval, minDistance, highAccuracy);
   }
 
-  private void requestLocationUpdates() {
+  private void requestLocationUpdates(long interval, float minDistance, boolean highAccuracy) {
     if (!isLocationEnabled()) {
-      sendLocationDisabledBroadcast(); // Notify the app about the issue
-      return;
+        sendLocationDisabledBroadcast(); // Notify the app about the issue
+        return;
     }
     if (!hasLocationPermissions()) {
-      requestPermissionsManually();
-      return;
+        requestPermissionsManually();
+        return;
     }
     LocationRequest locationRequest = new LocationRequest.Builder(
-        Priority.PRIORITY_HIGH_ACCURACY,
-        5000).setMinUpdateDistanceMeters(10).build();
+            highAccuracy ? Priority.PRIORITY_HIGH_ACCURACY : Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+            interval)
+            .setMinUpdateDistanceMeters(minDistance)
+            .build();
     if (ActivityCompat.checkSelfPermission(this,
-        Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-        && ActivityCompat.checkSelfPermission(this,
+            Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+            && ActivityCompat.checkSelfPermission(this,
             Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-      return;
+        return;
     }
     fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
-  }
+}
 
   private void checkLocationSettings() {
     LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000).build();
@@ -176,21 +181,28 @@ public class BackgroundLocationService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
-    if (!hasLocationPermissions()) {
-      requestPermissionsManually();
-      stopSelf(); // Stop service if permissions are missing
-      return START_NOT_STICKY;
-    }
-    if (intent != null && intent.hasExtra("reference")) {
-      reference = intent.getStringExtra("reference");
-      if (reference == null || reference.trim().isEmpty()) {
-        reference = "default_reference"; // Set a fallback reference to prevent null issues
+      if (!hasLocationPermissions()) {
+          requestPermissionsManually();
+          stopSelf(); // Stop service if permissions are missing
+          return START_NOT_STICKY;
       }
-    } else {
-      reference = "default_reference"; // Another fallback to avoid null reference
-    }
-    lastIndex = db.getNextIndexForReference(reference); // Resume index tracking safely
-    return START_STICKY;
+      if (intent != null && intent.hasExtra("reference")) {
+          reference = intent.getStringExtra("reference");
+          if (reference == null || reference.trim().isEmpty()) {
+              reference = "default_reference"; // Set a fallback reference to prevent null issues
+          }
+      } else {
+          reference = "default_reference"; // Another fallback to avoid null reference
+      }
+      lastIndex = db.getNextIndexForReference(reference); // Resume index tracking safely
+
+      // Get additional parameters for update interval and minimum distance
+      interval = intent.getLongExtra("interval", 3000); // Default to 3000ms
+      minDistance = intent.getFloatExtra("minDistance", 10); // Default to 10 meters
+      highAccuracy = intent.getBooleanExtra("highAccuracy", true); // Default to high accuracy
+
+      requestLocationUpdates(interval, minDistance, highAccuracy);
+      return START_STICKY;
   }
 
   private void requestPermissionsManually() {
