@@ -222,6 +222,41 @@ public class BackgroundLocationPlugin extends Plugin implements SensorEventListe
         pushLatestLocationToCapacitor(reference);
     }
 
+    @PluginMethod
+public void getCurrentLocation(PluginCall call) {
+    if (!hasLocationPermissions()) {
+        call.reject("Location permissions not granted.");
+        return;
+    }
+
+    // Default to high accuracy
+    LocationRequest request = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 0)
+        .setWaitForAccurateLocation(true)
+        .setMaxUpdateAgeMillis(0)
+        .build();
+
+    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+        .addOnSuccessListener(location -> {
+            if (location != null) {
+                JSObject result = new JSObject();
+                result.put("latitude", location.getLatitude());
+                result.put("longitude", location.getLongitude());
+                result.put("accuracy", location.getAccuracy());
+                result.put("altitude", location.getAltitude());
+                result.put("speed", location.getSpeed());
+                result.put("heading", location.getBearing());
+                result.put("timestamp", location.getTime());
+
+                call.resolve(result);
+            } else {
+                call.reject("Failed to get location.");
+            }
+        })
+        .addOnFailureListener(e -> {
+            call.reject("Error getting location: " + e.getMessage());
+        });
+}
+
     private void requestLocationUpdate(long interval, float minDistance, boolean highAccuracy) {
         LocationRequest locationRequest = new LocationRequest.Builder(
                 highAccuracy ? Priority.PRIORITY_HIGH_ACCURACY : Priority.PRIORITY_BALANCED_POWER_ACCURACY,

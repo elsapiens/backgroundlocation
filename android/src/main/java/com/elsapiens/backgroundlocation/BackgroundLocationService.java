@@ -45,15 +45,13 @@ public class BackgroundLocationService extends Service {
     db = new SQLiteDatabaseHelper(this);
     fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
-    // 🛑 STOP SERVICE IMMEDIATELY IF LOCATION IS DISABLED
     if (!isLocationEnabled()) {
       Log.e("BackgroundLocation", "Location is disabled. Stopping service.");
       sendLocationDisabledBroadcast();
       stopSelf();
-      return; // ✅ Prevent further execution
+      return;
     }
 
-    // 🛑 STOP SERVICE IF PERMISSIONS ARE MISSING
     if (!hasLocationPermissions()) {
       requestPermissionsManually();
       stopSelf();

@@ -39,6 +39,26 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
     return { locations: this.locations.filter((location) => location.reference === reference) };
   }
 
+  async getCurrentLocation(): Promise<{
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+    altitude?: number;
+    speed?: number;
+    heading?: number;
+    timestamp: number;
+  }> {
+    return {
+      latitude: 37.7749,
+      longitude: -122.4194,
+      accuracy: 5,
+      altitude: 10,
+      speed: 0,
+      heading: 0,
+      timestamp: Date.now(),
+    };
+  }
+
   async clearStoredLocations(): Promise<void> {
     this.locations = [];
   }

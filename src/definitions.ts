@@ -22,6 +22,16 @@ export interface BackgroundLocationPlugin {
 
   getStoredLocations({reference}: {reference: string}): Promise<{ locations: LocationData[] }>;
 
+  getCurrentLocation(): Promise<{
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+    altitude?: number;
+    speed?: number;
+    heading?: number;
+    timestamp: number;
+  }>;
+
   clearStoredLocations(): Promise<void>;
 
   addListener(eventName: 'locationUpdate', listenerFunc: (data: LocationData) => void): Promise<PluginListenerHandle>;
