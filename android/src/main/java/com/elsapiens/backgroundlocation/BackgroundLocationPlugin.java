@@ -50,8 +50,6 @@ import org.json.JSONException;
         })
 })
 public class BackgroundLocationPlugin extends Plugin implements SensorEventListener {
-    private static final int FOREGROUND_LOCATION_REQUEST_CODE = 1001;
-    private static final int BACKGROUND_LOCATION_REQUEST_CODE = 1002;
     private static final String TAG = "BackgroundLocation";
     private FusedLocationProviderClient fusedLocationClient;
     private LocationCallback locationCallback;
@@ -232,10 +230,14 @@ public void getCurrentLocation(PluginCall call) {
     // Default to high accuracy
     LocationRequest request = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 0)
         .setWaitForAccurateLocation(true)
-        .setMaxUpdateAgeMillis(0)
+        .setMaxUpdateAgeMillis(5000)
         .build();
 
-    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+        if (ActivityCompat.checkSelfPermission(this.getContext(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this.getContext(), Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            call.reject("Location permissions not granted.");
+            return;
+        }
+        fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
         .addOnSuccessListener(location -> {
             if (location != null) {
                 JSObject result = new JSObject();
@@ -253,7 +255,7 @@ public void getCurrentLocation(PluginCall call) {
             }
         })
         .addOnFailureListener(e -> {
-            call.reject("Error getting location: " + e.getMessage());
+            call.reject("Error fetching location: " + e.getMessage());
         });
 }
 
@@ -262,6 +264,7 @@ public void getCurrentLocation(PluginCall call) {
                 highAccuracy ? Priority.PRIORITY_HIGH_ACCURACY : Priority.PRIORITY_BALANCED_POWER_ACCURACY,
                 interval)
                 .setMinUpdateDistanceMeters(minDistance)
+                .setMaxUpdateAgeMillis(5000)
                 .setWaitForAccurateLocation(true)
                 .build();
         this.interval = interval;
@@ -466,7 +469,7 @@ public void getCurrentLocation(PluginCall call) {
         new AlertDialog.Builder(getActivity())
                 .setTitle("Background Location Required")
                 .setMessage(
-                        "To enable background location, go to:\nSettings > Apps > Your App > Permissions > Location > Allow All the Time.")
+                        "To enable background location, go to:\nSettings > Apps > Signal Scout > Permissions > Location > Allow All the Time.")
                 .setPositiveButton("Open Settings", (dialog, which) -> {
                     Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
                     intent.setData(Uri.parse("package:" + getActivity().getPackageName()));

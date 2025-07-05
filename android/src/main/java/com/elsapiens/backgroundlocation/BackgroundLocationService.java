@@ -6,10 +6,8 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.location.Location;
-import android.location.LocationManager;
 import android.net.Uri;
 import android.os.IBinder;
 import android.os.Looper;
@@ -103,6 +101,7 @@ public class BackgroundLocationService extends Service {
     LocationRequest locationRequest = new LocationRequest.Builder(
             highAccuracy ? Priority.PRIORITY_HIGH_ACCURACY : Priority.PRIORITY_BALANCED_POWER_ACCURACY,
             interval)
+            .setMaxUpdateAgeMillis(5000)
             .setMinUpdateDistanceMeters(minDistance)
             .build();
     if (ActivityCompat.checkSelfPermission(this,
@@ -115,7 +114,9 @@ public class BackgroundLocationService extends Service {
 }
 
   private void checkLocationSettings() {
-    LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000).build();
+    LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000)
+            .setMaxUpdateAgeMillis(5000)
+            .build();
     LocationSettingsRequest.Builder builder = new LocationSettingsRequest.Builder().addLocationRequest(locationRequest);
 
     SettingsClient settingsClient = LocationServices.getSettingsClient(this);
