@@ -4,10 +4,10 @@ A comprehensive Capacitor plugin for background location tracking with support f
 
 ## 📚 Documentation
 
-- **[Setup Guide](SETUP_GUIDE.md)** - Complete installation and integration guide
-- **[API Documentation](API_DOCUMENTATION.md)** - Detailed API reference with examples  
-- **[Developer Guide](DEVELOPER_GUIDE.md)** - Architecture overview and development guide
-- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to the project
+- **[Setup Guide](https://github.com/elsapiens/backgroundlocation/blob/main/SETUP_GUIDE.md)** - Complete installation and integration guide
+- **[API Documentation](https://github.com/elsapiens/backgroundlocation/blob/main/API_DOCUMENTATION.md)** - Detailed API reference with examples  
+- **[Developer Guide](https://github.com/elsapiens/backgroundlocation/blob/main/DEVELOPER_GUIDE.md)** - Architecture overview and development guide
+- **[Contributing Guide](https://github.com/elsapiens/backgroundlocation/blob/main/CONTRIBUTING.md)** - How to contribute to the project
 
 ## ✨ Features
 
