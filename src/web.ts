@@ -1,6 +1,6 @@
 import { WebPlugin } from '@capacitor/core';
 
-import type { BackgroundLocationPlugin, LocationData } from './definitions';
+import type { BackgroundLocationPlugin, LocationData, PermissionStatus } from './definitions';
 
 export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocationPlugin {
   private locations: LocationData[] = [];
@@ -11,12 +11,40 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
   constructor() {
     super();
   }
+
+  // New permission methods for web
+  async checkPermissions(): Promise<PermissionStatus> {
+    // Web platform permissions simulation
+    return {
+      location: 'granted',
+      backgroundLocation: 'granted', 
+      foregroundService: 'granted'
+    };
+  }
+
+  async requestPermissions(): Promise<PermissionStatus> {
+    // Web platform doesn't need actual permission requests
+    return this.checkPermissions();
+  }
+
+  async isLocationServiceEnabled(): Promise<{ enabled: boolean }> {
+    // Web platform location services simulation
+    return { enabled: true };
+  }
+
+  async openLocationSettings(): Promise<void> {
+    // Web platform doesn't have location settings
+    console.warn('Location settings not available on web platform');
+    return Promise.resolve();
+  }
+
   startLocationStatusTracking(): Promise<void> {
     setTimeout(() => {
       this.notifyListeners('locationStatus', { enabled: true });
     }, 10);
     return Promise.resolve();
   }
+  
   stopLocationStatusTracking(): Promise<void> {
     return Promise.resolve();
   }
@@ -100,5 +128,37 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
         this.notifyListeners('locationUpdate', newLocation);
       }
     }, 2000);
+  }
+
+  // Work Hour Tracking methods (web stubs)
+  async startWorkHourTracking(options: {
+    engineerId: string;
+    uploadInterval?: number;
+    serverUrl: string;
+    authToken?: string;
+    enableOfflineQueue?: boolean;
+  }): Promise<void> {
+    console.warn('Work hour tracking not available on web platform', options);
+    return Promise.resolve();
+  }
+
+  async stopWorkHourTracking(): Promise<void> {
+    console.warn('Work hour tracking not available on web platform');
+    return Promise.resolve();
+  }
+
+  async isWorkHourTrackingActive(): Promise<{ active: boolean }> {
+    console.warn('Work hour tracking not available on web platform');
+    return { active: false };
+  }
+
+  async getQueuedWorkHourLocations(): Promise<{ locations: any[] }> {
+    console.warn('Work hour tracking not available on web platform');
+    return { locations: [] };
+  }
+
+  async clearQueuedWorkHourLocations(): Promise<void> {
+    console.warn('Work hour tracking not available on web platform');
+    return Promise.resolve();
   }
 }

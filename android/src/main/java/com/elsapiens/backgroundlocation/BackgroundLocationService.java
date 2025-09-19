@@ -1,11 +1,16 @@
 package com.elsapiens.backgroundlocation;
 
 import android.Manifest;
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.net.Uri;
@@ -17,6 +22,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import com.google.android.gms.common.api.ResolvableApiException;
 import com.google.android.gms.location.*;
@@ -25,6 +31,7 @@ public class BackgroundLocationService extends Service {
   private static final String CHANNEL_ID = "location_service_channel";
   private FusedLocationProviderClient fusedLocationClient;
   private LocationCallback locationCallback;
+  private LocationBroadcastReceiver locationReceiver;
   private SQLiteDatabaseHelper db;
   private String reference; // Store reference passed from the plugin
   private int lastIndex = 0; // Track the last index
@@ -33,32 +40,65 @@ public class BackgroundLocationService extends Service {
   private long interval = 3000; // Default to 3000ms
   private float minDistance = 10; // Default to 10 meters
   private boolean highAccuracy = true; // Default to high accuracy
+  
+  // Service persistence
+  private AlarmManager alarmManager;
+  private PendingIntent restartPendingIntent;
+  private static final int RESTART_ALARM_ID = 1001;
+  private static final long RESTART_CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
   @Override
   public void onCreate() {
-
     super.onCreate();
-    startForeground(1, createNotification());
-    createNotificationChannel();
     db = new SQLiteDatabaseHelper(this);
     fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
+    
+    // Setup service restart mechanism
+    setupServiceRestartMechanism();
+
+    // Check permissions and location status before starting foreground service
+    if (!hasLocationPermissions()) {
+      Log.e("BackgroundLocation", "Missing location permissions. Cannot start service.");
+      stopSelf();
+      return;
+    }
 
     if (!isLocationEnabled()) {
-      Log.e("BackgroundLocation", "Location is disabled. Stopping service.");
+      Log.e("BackgroundLocation", "Location is disabled. Cannot start service.");
       sendLocationDisabledBroadcast();
       stopSelf();
       return;
     }
 
-    if (!hasLocationPermissions()) {
-      requestPermissionsManually();
+    try {
+      // Only start foreground service if all checks pass
+      createNotificationChannel();
+      startForeground(1, createNotification());
+      
+      // 🔹 Register Broadcast Receiver
+      locationReceiver = new LocationBroadcastReceiver();
+      IntentFilter filter = new IntentFilter("BackgroundLocationUpdate");
+      ContextCompat.registerReceiver(this, locationReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
+      Log.d("BackgroundLocation", "LocationBroadcastReceiver Registered");
+
+      setupLocationCallback();
+      
+    } catch (Exception e) {
+      Log.e("BackgroundLocation", "Error starting foreground service", e);
       stopSelf();
       return;
     }
+
+    // Start location updates
+    requestLocationUpdates(interval, minDistance, highAccuracy);
+  }
+
+  private void setupLocationCallback() {
     locationCallback = new LocationCallback() {
       @Override
       public void onLocationResult(@NonNull LocationResult locationResult) {
         if (!isLocationEnabled()) {
+          Log.w("BackgroundLocation", "Location disabled during tracking");
           sendLocationDisabledBroadcast();
           stopSelf(); // Stop the service if location is disabled
           return;
@@ -81,12 +121,6 @@ public class BackgroundLocationService extends Service {
         }
       }
     };
-    if (!hasLocationPermissions()) {
-      requestPermissionsManually();
-      stopSelf(); // Stop service if permissions are missing
-      return;
-    }
-    requestLocationUpdates(interval, minDistance, highAccuracy);
   }
 
   private void requestLocationUpdates(long interval, float minDistance, boolean highAccuracy) {
@@ -180,11 +214,22 @@ public class BackgroundLocationService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
+      // Always return START_STICKY for service persistence, even if permissions are missing
+      // This ensures the service can restart and check permissions again later
+      
       if (!hasLocationPermissions()) {
-          requestPermissionsManually();
-          stopSelf(); // Stop service if permissions are missing
-          return START_NOT_STICKY;
+          Log.w("BackgroundLocation", "Location permissions missing in onStartCommand, will retry when permissions are granted");
+          // Don't stop the service immediately, keep it running so it can be restarted
+          // The service will check permissions periodically
+          return START_STICKY;
       }
+      
+      if (!isLocationEnabled()) {
+          Log.w("BackgroundLocation", "Location services disabled in onStartCommand, will retry when location is enabled");
+          // Keep service running but don't request location updates
+          return START_STICKY;
+      }
+      
       if (intent != null && intent.hasExtra("reference")) {
           reference = intent.getStringExtra("reference");
           if (reference == null || reference.trim().isEmpty()) {
@@ -226,10 +271,95 @@ public class BackgroundLocationService extends Service {
   public IBinder onBind(Intent intent) {
     return null;
   }
+  
+  /**
+   * Setup service restart mechanism to ensure service persistence
+   */
+  private void setupServiceRestartMechanism() {
+    try {
+      alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+      
+      // Create intent for service restart
+      Intent restartIntent = new Intent(this, ServiceRestartReceiver.class);
+      restartIntent.setAction("com.elsapiens.backgroundlocation.RESTART_SERVICE");
+      
+      restartPendingIntent = PendingIntent.getBroadcast(
+        this, 
+        RESTART_ALARM_ID,
+        restartIntent, 
+        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+      );
+      
+      // Schedule periodic check
+      if (alarmManager != null) {
+        alarmManager.setRepeating(
+          AlarmManager.RTC_WAKEUP,
+          System.currentTimeMillis() + RESTART_CHECK_INTERVAL,
+          RESTART_CHECK_INTERVAL,
+          restartPendingIntent
+        );
+        Log.d("BackgroundLocation", "Service restart mechanism setup successfully");
+      }
+    } catch (Exception e) {
+      Log.e("BackgroundLocation", "Error setting up restart mechanism", e);
+    }
+  }
+  
+  /**
+   * Cancel the service restart mechanism
+   */
+  private void cancelServiceRestartMechanism() {
+    try {
+      if (alarmManager != null && restartPendingIntent != null) {
+        alarmManager.cancel(restartPendingIntent);
+        Log.d("BackgroundLocation", "Service restart mechanism cancelled");
+      }
+    } catch (Exception e) {
+      Log.e("BackgroundLocation", "Error cancelling restart mechanism", e);
+    }
+  }
+  
+  @Override
+  public void onTaskRemoved(Intent rootIntent) {
+    Log.i("BackgroundLocation", "App task removed, ensuring service continues running");
+    
+    // Restart the service when the app is removed from recent apps
+    try {
+      Intent restartServiceIntent = new Intent(getApplicationContext(), BackgroundLocationService.class);
+      restartServiceIntent.putExtra("reference", reference != null ? reference : "task_removed_restart");
+      restartServiceIntent.putExtra("interval", interval);
+      restartServiceIntent.putExtra("minDistance", minDistance);
+      restartServiceIntent.putExtra("highAccuracy", highAccuracy);
+      
+      startForegroundService(restartServiceIntent);
+      Log.i("BackgroundLocation", "Service restart initiated after task removal");
+    } catch (Exception e) {
+      Log.e("BackgroundLocation", "Failed to restart service after task removal", e);
+    }
+    
+    super.onTaskRemoved(rootIntent);
+  }
 
   @Override
   public void onDestroy() {
     super.onDestroy();
+    
+    // Cancel the restart mechanism when service is destroyed
+    cancelServiceRestartMechanism();
+    
+    // Unregister the broadcast receiver to prevent memory leaks
+    if (locationReceiver != null) {
+      try {
+        unregisterReceiver(locationReceiver);
+        Log.d("BackgroundLocation", "LocationBroadcastReceiver unregistered");
+      } catch (IllegalArgumentException e) {
+        // Receiver was not registered, ignore
+        Log.d("BackgroundLocation", "LocationBroadcastReceiver was not registered");
+      }
+      locationReceiver = null;
+    }
+    
+    // Remove location updates
     if (fusedLocationClient != null && locationCallback != null) {
       fusedLocationClient.removeLocationUpdates(locationCallback);
     }
