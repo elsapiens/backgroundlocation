@@ -4,10 +4,10 @@ A comprehensive Capacitor plugin for background location tracking with support f
 
 ## 📚 Documentation
 
-- **[Setup Guide](https://github.com/elsapiens/backgroundlocation/blob/main/SETUP_GUIDE.md)** - Complete installation and integration guide
-- **[API Documentation](https://github.com/elsapiens/backgroundlocation/blob/main/API_DOCUMENTATION.md)** - Detailed API reference with examples  
-- **[Developer Guide](https://github.com/elsapiens/backgroundlocation/blob/main/DEVELOPER_GUIDE.md)** - Architecture overview and development guide
-- **[Contributing Guide](https://github.com/elsapiens/backgroundlocation/blob/main/CONTRIBUTING.md)** - How to contribute to the project
+- **[Setup Guide](SETUP_GUIDE.md)** - Complete installation and integration guide
+- **[API Documentation](API_DOCUMENTATION.md)** - Detailed API reference with examples  
+- **[Developer Guide](DEVELOPER_GUIDE.md)** - Architecture overview and development guide
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to the project
 
 ## ✨ Features
 
@@ -18,9 +18,6 @@ A comprehensive Capacitor plugin for background location tracking with support f
 - **🔒 Permission Management**: Comprehensive Android permission handling
 - **📊 Real-time Events**: Live location updates via Capacitor events
 - **💾 Local Storage**: SQLite database for reliable data persistence
-- **🚀 Background Persistence**: Service continues running even when app is closed
-- **🔄 Auto-Recovery**: Automatic service restart if killed by system
-- **📲 Task Removal Handling**: Maintains tracking when app is swiped away
 
 ## 🚀 Quick Reference
 
@@ -54,51 +51,10 @@ Add the following permissions to your `android/app/src/main/AndroidManifest.xml`
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-<!-- Background persistence permissions -->
-<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-<uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-
 <!-- Network permissions for work hour tracking -->
 <uses-permission android:name="android.permission.INTERNET" />
 <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 ```
-
-## 🎯 Background Persistence
-
-**Version 0.0.18** introduces advanced background service persistence features that ensure location tracking continues even when the app is closed or killed by the system.
-
-### Key Features
-
-- **🔄 START_STICKY Service**: Automatically restarts if killed by the Android system
-- **⏰ AlarmManager Recovery**: Periodic health checks (every 30 minutes) to restart service if needed  
-- **📲 Task Removal Handling**: Maintains tracking when app is swiped away from recent apps
-- **🚫 Graceful Error Handling**: Continues running even with permission or location service changes
-- **🔋 Battery Optimized**: Uses Android's native service management while maintaining reliability
-
-### How It Works
-
-1. **Service Persistence**: The background service returns `START_STICKY` ensuring Android will restart it
-2. **Auto-Recovery**: `ServiceRestartReceiver` monitors service health and restarts when needed
-3. **Task Removal**: `onTaskRemoved()` method restarts service when app is closed
-4. **Permission Resilience**: Service waits for permissions to be restored rather than stopping
-
-### Testing Background Persistence
-
-To verify the service continues running:
-
-```bash
-# 1. Start the app and begin location tracking
-# 2. Kill the app process
-adb shell am kill com.your.app.package
-
-# 3. Check if service is still running
-adb shell dumpsys activity services | grep BackgroundLocationService
-
-# 4. Verify location tracking continues
-adb shell dumpsys location | grep your.app.package
-```
-
-The service will continue tracking location and you should see active GPS requests even after the app is killed.
 
 ## Quick Start
 
