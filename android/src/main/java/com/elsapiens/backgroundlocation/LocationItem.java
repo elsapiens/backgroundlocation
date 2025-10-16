@@ -15,7 +15,7 @@ public class LocationItem {
     public long timestamp;
 
     public LocationItem(String reference, int index, double latitude, double longitude, double altitude, float accuracy,
-            float speed, float heading, float altitudeAccuracy, long timestamp) {
+            float speed, float heading, float altitudeAccuracy, float totalDistance, long timestamp) {
         this.reference = reference;
         this.index = index;
         this.latitude = latitude;
@@ -25,6 +25,7 @@ public class LocationItem {
         this.speed = speed;
         this.heading = heading;
         this.altitudeAccuracy = altitudeAccuracy;
+        this.totalDistance = totalDistance;
         this.timestamp = timestamp;
     }
 

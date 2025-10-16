@@ -65,16 +65,20 @@ public class SQLiteDatabaseHelper extends SQLiteOpenHelper {
                 new String[] { reference });
         LocationItem location = null;
         if (cursor.moveToFirst()) {
+            // Calculate total distance for this reference
+            float totalDistance = getTotalDistanceForReference(reference);
+
             location = new LocationItem(
                     cursor.getString(1),
                     cursor.getInt(2),
                     cursor.getDouble(3),
                     cursor.getDouble(4),
                     cursor.getFloat(5),
-                    cursor.getLong(6),
+                    cursor.getFloat(6),
                     cursor.getFloat(7),
                     cursor.getFloat(8),
                     cursor.getFloat(9),
+                    totalDistance,
                     cursor.getLong(10));
         }
         cursor.close();

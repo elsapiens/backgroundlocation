@@ -719,7 +719,7 @@ public class BackgroundLocationPlugin extends Plugin {
     
     /**
      * Push location update to Capacitor (called by LocationBroadcastReceiver)
-     * 
+     *
      * @param locationItem Location item from background service
      */
     public void pushUpdateToCapacitor(LocationItem locationItem) {
@@ -733,8 +733,9 @@ public class BackgroundLocationPlugin extends Plugin {
         result.put("speed", locationItem.speed);
         result.put("heading", locationItem.heading);
         result.put("altitudeAccuracy", locationItem.altitudeAccuracy);
+        result.put("totalDistance", locationItem.totalDistance);
         result.put("timestamp", locationItem.timestamp);
-        
+
         notifyListeners("locationUpdate", result);
     }
 

@@ -2,6 +2,8 @@
 
 A comprehensive Capacitor plugin for background location tracking with support for both task-based tracking and work hour monitoring. Features intelligent location management, offline queuing, and battery optimization.
 
+**Developed by [Elsapiens](https://elsapiens.com)** - Innovative mobile solutions for enterprise location tracking and workforce management.
+
 ## 📚 Documentation
 
 - **[Setup Guide](SETUP_GUIDE.md)** - Complete installation and integration guide
@@ -643,8 +645,8 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) a
 ### Quick Development Setup
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/elsapiens-background-location.git
-cd elsapiens-background-location
+git clone https://github.com/elsapiens/backgroundlocation.git
+cd backgroundlocation
 
 # Install dependencies
 npm install
@@ -662,9 +664,10 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Support
 
-- **Documentation**: [API Documentation](API_DOCUMENTATION.md) | [Developer Guide](DEVELOPER_GUIDE.md)
-- **Issues**: [GitHub Issues](https://github.com/your-org/elsapiens-background-location/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/elsapiens-background-location/discussions)
+- **Documentation**: [API Documentation](API_DOCUMENTATION.md) | [Developer Guide](DEVELOPER_GUIDE.md) | [Setup Guide](SETUP_GUIDE.md)
+- **Issues**: [GitHub Issues](https://github.com/elsapiens/backgroundlocation/issues)
+- **Company**: [Elsapiens](https://elsapiens.com) - Enterprise mobile solutions
+- **Author**: Dawn Dharmishtan
 
 ---
 ```

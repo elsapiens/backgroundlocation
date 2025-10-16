@@ -26,9 +26,10 @@ public class LocationBroadcastReceiver extends BroadcastReceiver {
             float speed = intent.getFloatExtra("speed", 0);
             float heading = intent.getFloatExtra("heading", 0);
             float altitudeAccuracy = intent.getFloatExtra("altitudeAccuracy", 0);
+            float totalDistance = intent.getFloatExtra("totalDistance", 0);
             long timestamp = intent.getLongExtra("timestamp", 0);
             LocationItem locationItem = new LocationItem(reference, index, latitude, longitude, altitude, accuracy,
-                    speed, heading, altitudeAccuracy, timestamp);
+                    speed, heading, altitudeAccuracy, totalDistance, timestamp);
             LocationBroadcastReceiver.sendUpdateToCapacitor(locationItem, context);
 
         }
