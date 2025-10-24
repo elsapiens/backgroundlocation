@@ -107,7 +107,7 @@ public class BackgroundLocationService extends Service {
         for (Location location : locationResult.getLocations()) {
           lastIndex = db.getNextIndexForReference(reference);
           if (lastLocation != null) {
-            totalDistance += lastLocation.distanceTo(location);
+            totalDistance += lastLocation.distanceTo(location) / 1000; // Convert meters to kilometers
           }
           if (location.getAccuracy() > 30) {
             continue;
