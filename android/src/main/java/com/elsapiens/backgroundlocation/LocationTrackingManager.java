@@ -2,345 +2,184 @@ package com.elsapiens.backgroundlocation;
 
 import android.content.Context;
 import android.content.Intent;
-import android.location.Location;
+import android.location.LocationManager;
 import android.util.Log;
-import com.google.android.gms.location.Priority;
 
 /**
- * Manages location tracking services and coordinates between different tracking modes.
- * 
- * This class handles the lifecycle of task tracking and work hour tracking,
- * ensuring proper coordination and resource management.
+ * Orchestrates the lifecycle of both tracking modes.
+ *
+ * Validation and state persistence happen here; the actual fix collection lives in the
+ * two foreground services, which are the SINGLE pipeline for their mode. (Previously a
+ * second, in-process pipeline wrote the same fixes to the same table concurrently,
+ * duplicating rows, and work-hour tracking never started its service at all — it died
+ * with the app process.)
  */
 public class LocationTrackingManager {
     private static final String TAG = "LocationTrackingManager";
-    
-    // Service IDs for the location coordinator
-    public static final String TASK_TRACKING_SERVICE_ID = "task_tracking";
-    public static final String WORK_HOUR_SERVICE_ID = "work_hour_tracking";
-    
+
     private final Context context;
-    private final LocationCoordinator locationCoordinator;
-    private final LocationDataManager dataManager;
     private final LocationPermissionManager permissionManager;
-    
-    // Tracking state
-    private boolean isTaskTrackingActive = false;
-    private boolean isWorkHourTrackingActive = false;
-    private String currentTaskReference = null;
-    private WorkHourLocationUploader workHourUploader = null;
-    
-    // Default configuration
-    private TrackingConfiguration defaultTaskConfig = new TrackingConfiguration(
-        3000L,    // 3 second interval
-        10.0f,    // 10 meter minimum distance
-        Priority.PRIORITY_HIGH_ACCURACY
-    );
-    
-    private TrackingConfiguration defaultWorkHourConfig = new TrackingConfiguration(
-        300000L,  // 5 minute interval
-        50.0f,    // 50 meter minimum distance
-        Priority.PRIORITY_BALANCED_POWER_ACCURACY
-    );
-    
-    public LocationTrackingManager(Context context, LocationCoordinator coordinator, 
-                                 LocationDataManager dataManager, LocationPermissionManager permissionManager) {
+    private final TrackingStateStore stateStore;
+
+    public LocationTrackingManager(Context context, LocationPermissionManager permissionManager,
+            TrackingStateStore stateStore) {
         this.context = context;
-        this.locationCoordinator = coordinator;
-        this.dataManager = dataManager;
         this.permissionManager = permissionManager;
+        this.stateStore = stateStore;
     }
-    
+
     /**
-     * Start task-based location tracking
-     * 
-     * @param reference The task reference ID
-     * @param config Custom tracking configuration (optional)
-     * @return TrackingStartResult indicating success or failure
+     * Start task-based location tracking.
+     *
+     * Requires foreground location permission and enabled location services. Missing
+     * background permission does NOT block the start — the service keeps collecting
+     * fixes while it lives — but it is reported in the result so the app can prompt
+     * the user for "Allow all the time".
      */
-    public TrackingStartResult startTaskTracking(String reference, TrackingConfiguration config) {
-        Log.d(TAG, "Starting task tracking for reference: " + reference);
-        
-        // Validate permissions
-        if (!permissionManager.hasPermissionsForOperation(LocationPermissionManager.OperationType.BASIC_TRACKING)) {
-            return new TrackingStartResult(false, "Insufficient permissions for task tracking");
+    public TrackingStartResult startTaskTracking(TrackingStateStore.TaskTrackingState state) {
+        Log.d(TAG, "Starting task tracking for reference: " + state.reference);
+
+        if (state.reference == null || state.reference.trim().isEmpty()) {
+            return TrackingStartResult.failure(ErrorCodes.MISSING_PARAMETER, "reference must not be empty");
         }
-        
-        // Check if location services are enabled
+        if (!permissionManager.hasForegroundLocationPermission()) {
+            return TrackingStartResult.failure(ErrorCodes.PERMISSION_DENIED,
+                "Location permission not granted. Call requestPermissions() first.");
+        }
         if (!isLocationEnabled()) {
-            return new TrackingStartResult(false, "Location services are disabled. Please enable location services to start tracking.");
+            return TrackingStartResult.failure(ErrorCodes.LOCATION_SERVICES_DISABLED,
+                "Device location services are disabled. Ask the user to enable them "
+                    + "(openLocationSettings() opens the settings screen).");
         }
-        
-        // Stop existing task tracking if active
-        if (isTaskTrackingActive) {
-            stopTaskTracking();
-        }
-        
-        // Use provided config or default
-        TrackingConfiguration trackingConfig = config != null ? config : defaultTaskConfig;
-        
+
+        // Persist the session before starting so restart paths know what to resume.
+        stateStore.saveTaskTracking(state);
+
+        Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
+        serviceIntent.putExtra(BackgroundLocationService.EXTRA_REFERENCE, state.reference);
+        serviceIntent.putExtra(BackgroundLocationService.EXTRA_INTERVAL, state.interval);
+        serviceIntent.putExtra(BackgroundLocationService.EXTRA_MIN_DISTANCE, state.minDistance);
+        serviceIntent.putExtra(BackgroundLocationService.EXTRA_HIGH_ACCURACY, state.highAccuracy);
+        serviceIntent.putExtra(BackgroundLocationService.EXTRA_MAX_ACCURACY, state.maxAccuracy);
+
         try {
-            // Create location service callback for task tracking
-            LocationCoordinator.LocationServiceCallback taskCallback = new LocationCoordinator.LocationServiceCallback() {
-                @Override
-                public void onLocationReceived(Location location) {
-                    handleTaskLocationUpdate(location, reference);
-                }
-            };
-            
-            // Register with location coordinator
-            LocationCoordinator.LocationServiceInfo serviceInfo = new LocationCoordinator.LocationServiceInfo(
-                trackingConfig.interval,
-                trackingConfig.minDistance,
-                trackingConfig.priority,
-                taskCallback
-            );
-            
-            locationCoordinator.registerService(TASK_TRACKING_SERVICE_ID, serviceInfo);
-            
-            // Start background service
-            Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
-            serviceIntent.putExtra("reference", reference);
-            serviceIntent.putExtra("interval", trackingConfig.interval);
-            serviceIntent.putExtra("minDistance", trackingConfig.minDistance);
-            serviceIntent.putExtra("highAccuracy", trackingConfig.priority == Priority.PRIORITY_HIGH_ACCURACY);
             context.startForegroundService(serviceIntent);
-            
-            // Update state
-            isTaskTrackingActive = true;
-            currentTaskReference = reference;
-            
-            Log.d(TAG, "Task tracking started successfully");
-            return new TrackingStartResult(true, "Task tracking started");
-            
         } catch (Exception e) {
-            Log.e(TAG, "Error starting task tracking", e);
-            return new TrackingStartResult(false, "Error starting task tracking: " + e.getMessage());
+            // e.g. ForegroundServiceStartNotAllowedException when started from background.
+            stateStore.clearTaskTracking();
+            Log.e(TAG, "Error starting task tracking service", e);
+            return TrackingStartResult.failure(ErrorCodes.SERVICE_START_FAILED,
+                "Could not start the tracking service: " + e.getMessage());
         }
+
+        return TrackingStartResult.success(permissionManager.hasBackgroundLocationPermission());
     }
-    
-    /**
-     * Stop task-based location tracking
-     * 
-     * @return true if stopped successfully, false otherwise
-     */
-    public boolean stopTaskTracking() {
+
+    /** Stop task tracking. Idempotent — stopping when inactive is not an error. */
+    public void stopTaskTracking() {
         Log.d(TAG, "Stopping task tracking");
-        
+        stateStore.clearTaskTracking();
         try {
-            // Unregister from location coordinator
-            locationCoordinator.unregisterService(TASK_TRACKING_SERVICE_ID);
-            
-            // Stop background service
-            Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
-            context.stopService(serviceIntent);
-            
-            // Update state
-            isTaskTrackingActive = false;
-            currentTaskReference = null;
-            
-            Log.d(TAG, "Task tracking stopped successfully");
-            return true;
-            
+            context.stopService(new Intent(context, BackgroundLocationService.class));
         } catch (Exception e) {
-            Log.e(TAG, "Error stopping task tracking", e);
-            return false;
+            Log.w(TAG, "Error stopping task tracking service", e);
         }
     }
-    
+
     /**
-     * Start work hour location tracking
-     * 
-     * @param options Work hour tracking configuration
-     * @return TrackingStartResult indicating success or failure
+     * Start work-hour tracking. Same permission model as task tracking; the dedicated
+     * foreground service samples and uploads even when the app is backgrounded.
      */
-    public TrackingStartResult startWorkHourTracking(WorkHourTrackingOptions options) {
-        Log.d(TAG, "Starting work hour tracking for engineer: " + options.engineerId);
-        
-        // Validate permissions
-        if (!permissionManager.hasPermissionsForOperation(LocationPermissionManager.OperationType.WORK_HOUR_TRACKING)) {
-            return new TrackingStartResult(false, "Insufficient permissions for work hour tracking");
+    public TrackingStartResult startWorkHourTracking(TrackingStateStore.WorkHourState state) {
+        Log.d(TAG, "Starting work hour tracking for engineer: " + state.engineerId);
+
+        if (state.engineerId == null || state.engineerId.isEmpty()) {
+            return TrackingStartResult.failure(ErrorCodes.MISSING_PARAMETER, "engineerId must not be empty");
         }
-        
-        // Check if location services are enabled
+        if (state.serverUrl == null || state.serverUrl.isEmpty()) {
+            return TrackingStartResult.failure(ErrorCodes.MISSING_PARAMETER, "serverUrl must not be empty");
+        }
+        if (!permissionManager.hasForegroundLocationPermission()) {
+            return TrackingStartResult.failure(ErrorCodes.PERMISSION_DENIED,
+                "Location permission not granted. Call requestPermissions() first.");
+        }
         if (!isLocationEnabled()) {
-            return new TrackingStartResult(false, "Location services are disabled. Please enable location services to start tracking.");
+            return TrackingStartResult.failure(ErrorCodes.LOCATION_SERVICES_DISABLED,
+                "Device location services are disabled.");
         }
-        
-        // Validate required parameters
-        if (options.engineerId == null || options.engineerId.isEmpty()) {
-            return new TrackingStartResult(false, "Engineer ID is required");
-        }
-        
-        if (options.serverUrl == null || options.serverUrl.isEmpty()) {
-            return new TrackingStartResult(false, "Server URL is required");
-        }
-        
-        // Stop existing work hour tracking if active
-        if (isWorkHourTrackingActive) {
-            stopWorkHourTracking();
-        }
-        
+
+        stateStore.saveWorkHourTracking(state);
+
+        Intent serviceIntent = new Intent(context, WorkHourLocationService.class);
+        serviceIntent.putExtra(WorkHourLocationService.EXTRA_ENGINEER_ID, state.engineerId);
+        serviceIntent.putExtra(WorkHourLocationService.EXTRA_UPLOAD_INTERVAL, state.uploadInterval);
+        serviceIntent.putExtra(WorkHourLocationService.EXTRA_SERVER_URL, state.serverUrl);
+        serviceIntent.putExtra(WorkHourLocationService.EXTRA_AUTH_TOKEN, state.authToken);
+        serviceIntent.putExtra(WorkHourLocationService.EXTRA_OFFLINE_QUEUE, state.enableOfflineQueue);
+
         try {
-            // Create work hour uploader
-            workHourUploader = new WorkHourLocationUploader(
-                options.engineerId,
-                options.uploadInterval,
-                options.serverUrl,
-                options.authToken,
-                options.enableOfflineQueue,
-                null // Will be set via callback
-            );
-            
-            // Create location service callback for work hour tracking
-            LocationCoordinator.LocationServiceCallback workHourCallback = new LocationCoordinator.LocationServiceCallback() {
-                @Override
-                public void onLocationReceived(Location location) {
-                    handleWorkHourLocationUpdate(location, options.engineerId);
-                }
-            };
-            
-            // Register with location coordinator
-            LocationCoordinator.LocationServiceInfo serviceInfo = new LocationCoordinator.LocationServiceInfo(
-                options.uploadInterval,
-                defaultWorkHourConfig.minDistance,
-                defaultWorkHourConfig.priority,
-                workHourCallback
-            );
-            
-            locationCoordinator.registerService(WORK_HOUR_SERVICE_ID, serviceInfo);
-            
-            // Update state
-            isWorkHourTrackingActive = true;
-            
-            Log.d(TAG, "Work hour tracking started successfully");
-            return new TrackingStartResult(true, "Work hour tracking started");
-            
+            context.startForegroundService(serviceIntent);
         } catch (Exception e) {
-            Log.e(TAG, "Error starting work hour tracking", e);
-            return new TrackingStartResult(false, "Error starting work hour tracking: " + e.getMessage());
+            stateStore.clearWorkHourTracking();
+            Log.e(TAG, "Error starting work hour tracking service", e);
+            return TrackingStartResult.failure(ErrorCodes.SERVICE_START_FAILED,
+                "Could not start the work-hour service: " + e.getMessage());
         }
+
+        return TrackingStartResult.success(permissionManager.hasBackgroundLocationPermission());
     }
-    
-    /**
-     * Stop work hour location tracking
-     * 
-     * @return true if stopped successfully, false otherwise
-     */
-    public boolean stopWorkHourTracking() {
+
+    /** Stop work-hour tracking. Idempotent. */
+    public void stopWorkHourTracking() {
         Log.d(TAG, "Stopping work hour tracking");
-        
+        stateStore.clearWorkHourTracking();
         try {
-            // Stop uploader
-            if (workHourUploader != null) {
-                workHourUploader.stop();
-                workHourUploader = null;
-            }
-            
-            // Unregister from location coordinator
-            locationCoordinator.unregisterService(WORK_HOUR_SERVICE_ID);
-            
-            // Update state
-            isWorkHourTrackingActive = false;
-            
-            Log.d(TAG, "Work hour tracking stopped successfully");
-            return true;
-            
+            context.stopService(new Intent(context, WorkHourLocationService.class));
         } catch (Exception e) {
-            Log.e(TAG, "Error stopping work hour tracking", e);
-            return false;
+            Log.w(TAG, "Error stopping work hour tracking service", e);
         }
     }
-    
-    /**
-     * Handle location updates for task tracking
-     */
-    private void handleTaskLocationUpdate(Location location, String reference) {
-        LocationDataManager.LocationProcessingResult result = dataManager.processLocationUpdate(
-            location, reference, defaultTaskConfig.minDistance
-        );
-        
-        if (result.shouldSave && result.index != null) {
-            // Notify listeners about the location update
-            // This would typically be handled by the main plugin class
-            Log.d(TAG, "Task location processed: " + result.message);
-        }
+
+    public boolean isTaskTrackingActive() {
+        return stateStore.isTaskTrackingActive();
     }
-    
-    /**
-     * Handle location updates for work hour tracking
-     */
-    private void handleWorkHourLocationUpdate(Location location, String engineerId) {
-        if (workHourUploader != null) {
-            workHourUploader.addLocationToQueue(location);
-            Log.d(TAG, "Work hour location queued for engineer: " + engineerId);
-        }
+
+    public boolean isWorkHourTrackingActive() {
+        return stateStore.isWorkHourTrackingActive();
     }
-    
-    // Getters for current state
-    public boolean isTaskTrackingActive() { return isTaskTrackingActive; }
-    public boolean isWorkHourTrackingActive() { return isWorkHourTrackingActive; }
-    public String getCurrentTaskReference() { return currentTaskReference; }
-    public WorkHourLocationUploader getWorkHourUploader() { return workHourUploader; }
-    
-    /**
-     * Configuration for location tracking
-     */
-    public static class TrackingConfiguration {
-        public final long interval;
-        public final float minDistance;
-        public final int priority;
-        
-        public TrackingConfiguration(long interval, float minDistance, int priority) {
-            this.interval = interval;
-            this.minDistance = minDistance;
-            this.priority = priority;
-        }
+
+    public String getCurrentTaskReference() {
+        TrackingStateStore.TaskTrackingState state = stateStore.getTaskTracking();
+        return state != null ? state.reference : null;
     }
-    
-    /**
-     * Options for work hour tracking
-     */
-    public static class WorkHourTrackingOptions {
-        public final String engineerId;
-        public final long uploadInterval;
-        public final String serverUrl;
-        public final String authToken;
-        public final boolean enableOfflineQueue;
-        
-        public WorkHourTrackingOptions(String engineerId, long uploadInterval, String serverUrl, 
-                                     String authToken, boolean enableOfflineQueue) {
-            this.engineerId = engineerId;
-            this.uploadInterval = uploadInterval;
-            this.serverUrl = serverUrl;
-            this.authToken = authToken;
-            this.enableOfflineQueue = enableOfflineQueue;
-        }
-    }
-    
-    /**
-     * Check if location services are enabled on the device
-     * 
-     * @return true if location services are enabled, false otherwise
-     */
+
     private boolean isLocationEnabled() {
-        android.location.LocationManager locationManager = (android.location.LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+        LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
         return locationManager != null
-            && (locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
-                locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER));
+            && (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                || locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
     }
-    
-    
-    /**
-     * Result of starting a tracking operation
-     */
+
+    /** Result of starting a tracking operation, carrying a typed error code on failure. */
     public static class TrackingStartResult {
         public final boolean success;
+        public final String code;
         public final String message;
-        
-        public TrackingStartResult(boolean success, String message) {
+        public final boolean backgroundLocationGranted;
+
+        private TrackingStartResult(boolean success, String code, String message, boolean backgroundLocationGranted) {
             this.success = success;
+            this.code = code;
             this.message = message;
+            this.backgroundLocationGranted = backgroundLocationGranted;
+        }
+
+        public static TrackingStartResult success(boolean backgroundLocationGranted) {
+            return new TrackingStartResult(true, null, "Tracking started", backgroundLocationGranted);
+        }
+
+        public static TrackingStartResult failure(String code, String message) {
+            return new TrackingStartResult(false, code, message, false);
         }
     }
 }

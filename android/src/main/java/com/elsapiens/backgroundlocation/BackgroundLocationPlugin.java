@@ -7,467 +7,413 @@ import android.content.IntentFilter;
 import android.location.Location;
 import android.location.LocationManager;
 import android.net.Uri;
+import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
 import androidx.core.content.ContextCompat;
 
-import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
-import com.google.android.gms.location.*;
+import com.google.android.gms.location.CurrentLocationRequest;
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.Granularity;
+import com.google.android.gms.location.LocationCallback;
+import com.google.android.gms.location.LocationRequest;
+import com.google.android.gms.location.LocationResult;
+import com.google.android.gms.location.LocationServices;
+import com.google.android.gms.location.Priority;
 
-import org.json.JSONException;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Capacitor plugin for background location tracking with task-based and work hour tracking capabilities.
- * 
- * This plugin provides comprehensive location tracking functionality including:
- * - Task-based location tracking with detailed route recording
- * - Work hour tracking with periodic server uploads
- * - Intelligent coordination between multiple tracking modes
- * - Comprehensive permission management
- * - Battery-optimized location updates
- * 
- * @version 1.0.0
- * @author Elsapiens Team
+ * Capacitor plugin for background location tracking.
+ *
+ * Responsibilities are delegated to focused collaborators (SOLID): permission checks
+ * live in {@link LocationPermissionManager}, service lifecycle in
+ * {@link LocationTrackingManager}, session persistence in {@link TrackingStateStore},
+ * progressive-accuracy decisions in {@link CurrentLocationWatcher}. This class only
+ * translates between the Capacitor bridge and those collaborators.
+ *
+ * Error contract: every reject carries a code from {@link ErrorCodes}; asynchronous
+ * failures (service died, permission revoked mid-tracking, GPS switched off) surface
+ * through the "error" event. The plugin itself never crashes the app on a permission
+ * problem — it reports and lets the app drive the user to the right settings screen.
  */
 @CapacitorPlugin(name = "BackgroundLocation", permissions = {
-        @Permission(alias = "foregroundLocation", strings = {
+        @Permission(alias = BackgroundLocationPlugin.ALIAS_FOREGROUND, strings = {
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION
         }),
-        @Permission(alias = "foregroundLocationNew", strings = {
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-                Manifest.permission.FOREGROUND_SERVICE_LOCATION
-        }),
-        @Permission(alias = "backgroundLocation", strings = {
+        @Permission(alias = BackgroundLocationPlugin.ALIAS_BACKGROUND, strings = {
                 Manifest.permission.ACCESS_BACKGROUND_LOCATION
         })
 })
 public class BackgroundLocationPlugin extends Plugin {
     private static final String TAG = "BackgroundLocationPlugin";
-    
-    // Singleton instance for service access
+
+    static final String ALIAS_FOREGROUND = "foregroundLocation";
+    static final String ALIAS_BACKGROUND = "backgroundLocation";
+
+    private static final long DEFAULT_CURRENT_LOCATION_TIMEOUT_MS = 30_000L;
+
+    // Singleton instance for broadcast receiver access
     private static BackgroundLocationPlugin instance;
-    
-    // Core components
+
     private FusedLocationProviderClient fusedLocationClient;
-    private LocationCoordinator locationCoordinator;
     private LocationPermissionManager permissionManager;
-    private LocationDataManager dataManager;
     private LocationTrackingManager trackingManager;
-    
-    // Database and receivers
+    private LocationDataManager dataManager;
+    private TrackingStateStore stateStore;
     private SQLiteDatabaseHelper database;
+
     private LocationBroadcastReceiver locationReceiver;
     private LocationStateReceiver locationStateReceiver;
-    
-    // Work hour tracking state
-    private List<BackgroundLocationPlugin.WorkHourLocationData> queuedWorkHourLocations = new ArrayList<>();
-    
-    public BackgroundLocationPlugin() {
-        instance = this;
-    }
-    
-    /**
-     * Get the current plugin instance (for service access)
-     * 
-     * @return Current plugin instance or null if not initialized
-     */
+
+    // Progressive-accuracy current-location watch state
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private CurrentLocationWatcher currentWatcher;
+    private LocationCallback currentWatchCallback;
+    private PluginCall currentWatchCall;
+    private Runnable currentWatchTimeout;
+
+    // JS-visible mirror of queued work-hour fixes (authoritative queue lives in the service)
+    private final WorkHourLocationQueue workHourMirror = new WorkHourLocationQueue();
+
     public static BackgroundLocationPlugin getInstance() {
         return instance;
     }
-    
+
+    /** @deprecated use {@link #getInstance()} */
+    @Deprecated
     public static BackgroundLocationPlugin getCurrentInstance() {
         return instance;
     }
-    
+
     @Override
     public void load() {
         super.load();
-        
+        instance = this;
         try {
             Context context = getContext();
-            Log.d(TAG, "Initializing BackgroundLocationPlugin");
-            
-            // Initialize core components
-            initializeCoreComponents(context);
-            
-            // Register broadcast receiver
+            database = new SQLiteDatabaseHelper(context);
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(context);
+            permissionManager = new LocationPermissionManager(context);
+            dataManager = new LocationDataManager(database);
+            stateStore = new TrackingStateStore(new SharedPrefsKeyValueStore(context));
+            trackingManager = new LocationTrackingManager(context, permissionManager, stateStore);
             registerLocationReceiver(context);
-            
-            Log.d(TAG, "BackgroundLocationPlugin initialization completed");
-            
+            Log.d(TAG, "BackgroundLocationPlugin initialized");
         } catch (Exception e) {
             Log.e(TAG, "Error during plugin initialization", e);
         }
     }
-    
-    /**
-     * Initialize all core components and dependencies
-     */
-    private void initializeCoreComponents(Context context) {
-        // Initialize database
-        database = new SQLiteDatabaseHelper(context);
-        
-        // Initialize location services
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(context);
-        locationCoordinator = LocationCoordinator.getInstance(fusedLocationClient);
-        
-        // Initialize managers
-        permissionManager = new LocationPermissionManager(context);
-        dataManager = new LocationDataManager(database);
-        trackingManager = new LocationTrackingManager(context, locationCoordinator, dataManager, permissionManager);
-        
-        Log.d(TAG, "Core components initialized successfully");
-    }
-    
-    /**
-     * Register location broadcast receiver
-     */
+
     private void registerLocationReceiver(Context context) {
         locationReceiver = new LocationBroadcastReceiver();
-        IntentFilter filter = new IntentFilter("BackgroundLocationUpdate");
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(BackgroundLocationService.ACTION_LOCATION_UPDATE);
+        filter.addAction(BackgroundLocationService.ACTION_LOCATION_DISABLED);
+        filter.addAction(BackgroundLocationService.ACTION_ERROR);
         ContextCompat.registerReceiver(context, locationReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
-        Log.d(TAG, "LocationBroadcastReceiver registered");
     }
-    
+
     @Override
     protected void handleOnDestroy() {
-        super.handleOnDestroy();
-        
         try {
-            Log.d(TAG, "Cleaning up BackgroundLocationPlugin");
-            
-            // Clean up location coordinator
-            if (locationCoordinator != null) {
-                locationCoordinator.cleanup();
-            }
-            
-            // Stop all tracking
-            if (trackingManager != null) {
-                trackingManager.stopTaskTracking();
-                trackingManager.stopWorkHourTracking();
-            }
-            
-            // Unregister receivers
+            cancelCurrentWatch(null);
             Context context = getContext();
             if (locationReceiver != null) {
-                context.unregisterReceiver(locationReceiver);
+                try {
+                    context.unregisterReceiver(locationReceiver);
+                } catch (IllegalArgumentException ignored) {
+                }
+                locationReceiver = null;
             }
             if (locationStateReceiver != null) {
                 try {
                     context.unregisterReceiver(locationStateReceiver);
-                } catch (IllegalArgumentException e) {
-                    Log.w(TAG, "Location state receiver not registered", e);
+                } catch (IllegalArgumentException ignored) {
                 }
+                locationStateReceiver = null;
             }
-            
-            Log.d(TAG, "Plugin cleanup completed");
-            
+            // Deliberately NOT stopping the tracking services here: the bridge dies when
+            // the app is swiped away, but an active tracking session must survive that.
         } catch (Exception e) {
             Log.e(TAG, "Error during plugin cleanup", e);
+        } finally {
+            if (instance == this) {
+                instance = null;
+            }
         }
+        super.handleOnDestroy();
     }
-    
+
     // =================================================================================
-    // PERMISSION MANAGEMENT METHODS
+    // PERMISSIONS
     // =================================================================================
-    
-    /**
-     * Check current permission status for all location-related permissions
-     * 
-     * @param call Capacitor plugin call
-     */
+
     @PluginMethod
     public void checkPermissions(PluginCall call) {
         try {
-            LocationPermissionManager.PermissionStatus status = permissionManager.getDetailedPermissionStatus();
-            
-            JSObject result = new JSObject();
-            result.put("location", status.location);
-            result.put("backgroundLocation", status.backgroundLocation);
-            result.put("foregroundService", status.foregroundService);
-            
-            call.resolve(result);
-            
+            call.resolve(buildPermissionStatus());
         } catch (Exception e) {
             Log.e(TAG, "Error checking permissions", e);
-            call.reject("Error checking permissions: " + e.getMessage());
+            call.reject("Error checking permissions: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
+
     /**
-     * Request location permissions from the user
-     * 
-     * @param call Capacitor plugin call
+     * Requests the missing permissions, foreground first, then background.
+     *
+     * Android requires the two tiers to be requested separately: the foreground
+     * dialog offers "While using the app"; the background request then opens the
+     * app's location settings where the user can pick "Allow all the time".
+     * Pass {@code permissions: ["location"]} to request only the foreground tier.
      */
     @PluginMethod
     public void requestPermissions(PluginCall call) {
         try {
-            Log.d(TAG, "Requesting permissions...");
-            
-            if (!permissionManager.hasLocationPermissions()) {
-                Log.d(TAG, "Requesting foreground location permissions");
-                requestLocationPermissions(call);
-            } else if (!permissionManager.hasBackgroundLocationPermission()) {
-                Log.d(TAG, "Requesting background location permission");
-                requestBackgroundPermission(call);
-            } else {
-                // All permissions already granted
-                Log.d(TAG, "All permissions already granted");
-                checkPermissions(call);
+            boolean wantsForeground = wantsPermission(call, "location");
+            boolean wantsBackground = wantsPermission(call, "backgroundLocation");
+
+            if (wantsForeground && !permissionManager.hasForegroundLocationPermission()) {
+                requestPermissionForAlias(ALIAS_FOREGROUND, call, "foregroundPermissionCallback");
+                return;
             }
-            
+            if (wantsBackground && !permissionManager.hasBackgroundLocationPermission()) {
+                if (!permissionManager.hasForegroundLocationPermission()) {
+                    call.reject("Foreground location permission must be granted before requesting background location.",
+                        ErrorCodes.PERMISSION_DENIED);
+                    return;
+                }
+                requestPermissionForAlias(ALIAS_BACKGROUND, call, "backgroundPermissionCallback");
+                return;
+            }
+            call.resolve(buildPermissionStatus());
         } catch (Exception e) {
             Log.e(TAG, "Error requesting permissions", e);
-            call.reject("Error requesting permissions: " + e.getMessage());
+            call.reject("Error requesting permissions: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
+
     @PermissionCallback
-    private void requestLocationPermissions(PluginCall call) {
-        Log.d(TAG, "requestLocationPermissions called, SDK_INT: " + android.os.Build.VERSION.SDK_INT);
-        if (android.os.Build.VERSION.SDK_INT >= 34) { // Android 14+
-            Log.d(TAG, "Requesting foregroundLocationNew permissions");
-            requestPermissionForAlias("foregroundLocationNew", call, "requestBackgroundPermission");
-        } else {
-            Log.d(TAG, "Requesting foregroundLocation permissions");
-            requestPermissionForAlias("foregroundLocation", call, "requestBackgroundPermission");
+    private void foregroundPermissionCallback(PluginCall call) {
+        boolean wantsBackground = wantsPermission(call, "backgroundLocation");
+        if (wantsBackground
+                && permissionManager.hasForegroundLocationPermission()
+                && !permissionManager.hasBackgroundLocationPermission()) {
+            requestPermissionForAlias(ALIAS_BACKGROUND, call, "backgroundPermissionCallback");
+            return;
+        }
+        call.resolve(buildPermissionStatus());
+    }
+
+    @PermissionCallback
+    private void backgroundPermissionCallback(PluginCall call) {
+        call.resolve(buildPermissionStatus());
+    }
+
+    private boolean wantsPermission(PluginCall call, String name) {
+        try {
+            List<String> requested = call.getArray("permissions") != null
+                ? call.getArray("permissions").toList()
+                : null;
+            return requested == null || requested.isEmpty() || requested.contains(name);
+        } catch (Exception e) {
+            return true;
         }
     }
-    
-    @PermissionCallback
-    private void requestBackgroundPermission(PluginCall call) {
-        Log.d(TAG, "requestBackgroundPermission called");
-        requestPermissionForAlias("backgroundLocation", call, "checkPermissions");
+
+    private JSObject buildPermissionStatus() {
+        JSObject result = new JSObject();
+        result.put("location", permissionManager.hasForegroundLocationPermission()
+            ? "granted" : aliasState(ALIAS_FOREGROUND));
+        result.put("backgroundLocation", permissionManager.hasBackgroundLocationPermission()
+            ? "granted" : aliasState(ALIAS_BACKGROUND));
+        result.put("accuracy", permissionManager.getGrantedAccuracy());
+        result.put("foregroundService", permissionManager.hasForegroundServicePermission() ? "granted" : "denied");
+        return result;
     }
-    
-    /**
-     * Check if device location services are enabled
-     * 
-     * @param call Capacitor plugin call
-     */
+
+    private String aliasState(String alias) {
+        PermissionState state = getPermissionState(alias);
+        return state != null ? state.toString() : "prompt";
+    }
+
     @PluginMethod
     public void isLocationServiceEnabled(PluginCall call) {
         try {
-            JSObject result = isLocationEnabled();
-            call.resolve(result);
-            
+            call.resolve(isLocationEnabled());
         } catch (Exception e) {
             Log.e(TAG, "Error checking location service status", e);
-            call.reject("Error checking location service status: " + e.getMessage());
+            call.reject("Error checking location service status: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
+
     /**
-     * Open device location settings
-     * 
-     * @param call Capacitor plugin call
+     * Opens the app's system settings page — the screen where the user can change the
+     * location permission to "Allow all the time" after a background-permission denial.
      */
     @PluginMethod
     public void openLocationSettings(PluginCall call) {
         try {
             Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-            intent.setData(Uri.parse("package:" + getActivity().getPackageName()));
+            intent.setData(Uri.parse("package:" + getContext().getPackageName()));
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            getActivity().startActivity(intent);
+            getContext().startActivity(intent);
             call.resolve();
-            
         } catch (Exception e) {
-            Log.e(TAG, "Error opening location settings", e);
-            call.reject("Error opening location settings: " + e.getMessage());
+            Log.e(TAG, "Error opening app settings", e);
+            call.reject("Error opening app settings: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    // =================================================================================
-    // TASK TRACKING METHODS
-    // =================================================================================
-    
+
     /**
-     * Start task-based location tracking
-     * 
-     * @param call Capacitor plugin call with parameters: reference, interval, minDistance, highAccuracy
+     * Opens the device location-services screen — for the LOCATION_SERVICES_DISABLED
+     * case where GPS itself is switched off.
      */
+    @PluginMethod
+    public void openDeviceLocationSettings(PluginCall call) {
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            Log.e(TAG, "Error opening device location settings", e);
+            call.reject("Error opening device location settings: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
+        }
+    }
+
+    // =================================================================================
+    // TASK TRACKING
+    // =================================================================================
+
     @PluginMethod
     public void startTracking(PluginCall call) {
         try {
-            // Validate required parameters
-            if (!call.getData().has("reference")) {
-                call.reject("Missing required 'reference' parameter");
-                return;
-            }
-            
-            // Check permissions before starting tracking
-            if (!permissionManager.hasLocationPermissions()) {
-                call.reject("Location permissions not granted. Please request permissions first.");
-                return;
-            }
-            
             String reference = call.getString("reference");
-            long interval = call.getLong("interval", 3000L);
-            float minDistance = call.getFloat("minDistance", 10.0f);
-            boolean highAccuracy = call.getBoolean("highAccuracy", true);
-            
-            // Create tracking configuration
-            int priority = highAccuracy ? Priority.PRIORITY_HIGH_ACCURACY : Priority.PRIORITY_BALANCED_POWER_ACCURACY;
-            LocationTrackingManager.TrackingConfiguration config = 
-                new LocationTrackingManager.TrackingConfiguration(interval, minDistance, priority);
-            
-            // Start tracking
-            LocationTrackingManager.TrackingStartResult result = trackingManager.startTaskTracking(reference, config);
-            
-            if (result.success) {
-                call.resolve();
-            } else {
-                call.reject(result.message);
+            if (reference == null || reference.trim().isEmpty()) {
+                call.reject("Missing required 'reference' parameter", ErrorCodes.MISSING_PARAMETER);
+                return;
             }
-            
+
+            TrackingStateStore.TaskTrackingState state = new TrackingStateStore.TaskTrackingState(
+                reference,
+                call.getLong("interval", TrackingStateStore.DEFAULT_INTERVAL_MS),
+                call.getFloat("minDistance", TrackingStateStore.DEFAULT_MIN_DISTANCE_METERS),
+                Boolean.TRUE.equals(call.getBoolean("highAccuracy", true)),
+                call.getFloat("maxAccuracy", TrackingStateStore.DEFAULT_MAX_ACCURACY_METERS),
+                call.getString("notificationTitle"),
+                call.getString("notificationText")
+            );
+
+            LocationTrackingManager.TrackingStartResult result = trackingManager.startTaskTracking(state);
+            if (result.success) {
+                JSObject data = new JSObject();
+                data.put("backgroundLocationGranted", result.backgroundLocationGranted);
+                data.put("accuracy", permissionManager.getGrantedAccuracy());
+                call.resolve(data);
+            } else {
+                call.reject(result.message, result.code);
+            }
         } catch (Exception e) {
             Log.e(TAG, "Error starting task tracking", e);
-            call.reject("Error starting task tracking: " + e.getMessage());
+            call.reject("Error starting task tracking: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    /**
-     * Stop task-based location tracking
-     * 
-     * @param call Capacitor plugin call
-     */
+
     @PluginMethod
     public void stopTracking(PluginCall call) {
         try {
-            boolean success = trackingManager.stopTaskTracking();
-            
-            if (success) {
-                call.resolve();
-            } else {
-                call.reject("Failed to stop task tracking");
-            }
-            
+            trackingManager.stopTaskTracking();
+            call.resolve();
         } catch (Exception e) {
             Log.e(TAG, "Error stopping task tracking", e);
-            call.reject("Error stopping task tracking: " + e.getMessage());
+            call.reject("Error stopping task tracking: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
+
+    @PluginMethod
+    public void getTrackingStatus(PluginCall call) {
+        try {
+            JSObject result = new JSObject();
+            result.put("isTracking", trackingManager.isTaskTrackingActive());
+            result.put("isWorkHourTracking", trackingManager.isWorkHourTrackingActive());
+            result.put("reference", trackingManager.getCurrentTaskReference());
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("Error reading tracking status: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
+        }
+    }
+
     // =================================================================================
-    // WORK HOUR TRACKING METHODS  
+    // WORK HOUR TRACKING
     // =================================================================================
-    
-    /**
-     * Start work hour tracking with periodic server uploads
-     * 
-     * @param call Capacitor plugin call with parameters: engineerId, uploadInterval, serverUrl, authToken, enableOfflineQueue
-     */
+
     @PluginMethod
     public void startWorkHourTracking(PluginCall call) {
         try {
-            // Check permissions before starting tracking
-            if (!permissionManager.hasLocationPermissions()) {
-                call.reject("Location permissions not granted. Please request permissions first.");
-                return;
-            }
-            
-            // Validate required parameters
             String engineerId = call.getString("engineerId");
-            if (engineerId == null || engineerId.isEmpty()) {
-                call.reject("Missing required 'engineerId' parameter");
-                return;
-            }
-            
             String serverUrl = call.getString("serverUrl");
-            if (serverUrl == null || serverUrl.isEmpty()) {
-                call.reject("Missing required 'serverUrl' parameter");
-                return;
-            }
-            
-            // Get optional parameters
-            long uploadInterval = call.getLong("uploadInterval", 300000L); // 5 minutes default
-            String authToken = call.getString("authToken");
-            boolean enableOfflineQueue = call.getBoolean("enableOfflineQueue", true);
-            
-            // Create work hour tracking options
-            LocationTrackingManager.WorkHourTrackingOptions options = 
-                new LocationTrackingManager.WorkHourTrackingOptions(
-                    engineerId, uploadInterval, serverUrl, authToken, enableOfflineQueue
-                );
-            
-            // Start work hour tracking
-            LocationTrackingManager.TrackingStartResult result = trackingManager.startWorkHourTracking(options);
-            
+
+            TrackingStateStore.WorkHourState state = new TrackingStateStore.WorkHourState(
+                engineerId,
+                call.getLong("uploadInterval", TrackingStateStore.DEFAULT_UPLOAD_INTERVAL_MS),
+                serverUrl,
+                call.getString("authToken"),
+                Boolean.TRUE.equals(call.getBoolean("enableOfflineQueue", true))
+            );
+
+            LocationTrackingManager.TrackingStartResult result = trackingManager.startWorkHourTracking(state);
             if (result.success) {
-                call.resolve();
+                JSObject data = new JSObject();
+                data.put("backgroundLocationGranted", result.backgroundLocationGranted);
+                call.resolve(data);
             } else {
-                call.reject(result.message);
+                call.reject(result.message, result.code);
             }
-            
         } catch (Exception e) {
             Log.e(TAG, "Error starting work hour tracking", e);
-            call.reject("Error starting work hour tracking: " + e.getMessage());
+            call.reject("Error starting work hour tracking: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    /**
-     * Stop work hour tracking
-     * 
-     * @param call Capacitor plugin call
-     */
+
     @PluginMethod
     public void stopWorkHourTracking(PluginCall call) {
         try {
-            boolean success = trackingManager.stopWorkHourTracking();
-            
-            if (success) {
-                call.resolve();
-            } else {
-                call.reject("Failed to stop work hour tracking");
-            }
-            
+            trackingManager.stopWorkHourTracking();
+            call.resolve();
         } catch (Exception e) {
             Log.e(TAG, "Error stopping work hour tracking", e);
-            call.reject("Error stopping work hour tracking: " + e.getMessage());
+            call.reject("Error stopping work hour tracking: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    /**
-     * Check if work hour tracking is currently active
-     * 
-     * @param call Capacitor plugin call
-     */
+
     @PluginMethod
     public void isWorkHourTrackingActive(PluginCall call) {
         try {
             JSObject result = new JSObject();
             result.put("active", trackingManager.isWorkHourTrackingActive());
             call.resolve(result);
-            
         } catch (Exception e) {
-            Log.e(TAG, "Error checking work hour tracking status", e);
-            call.reject("Error checking work hour tracking status: " + e.getMessage());
+            call.reject("Error checking work hour tracking status: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    /**
-     * Get queued work hour locations that haven't been uploaded yet
-     * 
-     * @param call Capacitor plugin call
-     */
+
     @PluginMethod
     public void getQueuedWorkHourLocations(PluginCall call) {
         try {
-            JSArray locations = new JSArray();
-            
-            for (WorkHourLocationData location : queuedWorkHourLocations) {
+            com.getcapacitor.JSArray locations = new com.getcapacitor.JSArray();
+            for (WorkHourLocationData location : workHourMirror.snapshot()) {
                 JSObject locationObj = new JSObject();
                 locationObj.put("latitude", location.latitude);
                 locationObj.put("longitude", location.longitude);
@@ -476,201 +422,314 @@ public class BackgroundLocationPlugin extends Plugin {
                 locationObj.put("engineerId", location.engineerId);
                 locations.put(locationObj);
             }
-            
             JSObject result = new JSObject();
             result.put("locations", locations);
             call.resolve(result);
-            
         } catch (Exception e) {
-            Log.e(TAG, "Error getting queued work hour locations", e);
-            call.reject("Error getting queued work hour locations: " + e.getMessage());
+            call.reject("Error getting queued work hour locations: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    /**
-     * Clear all queued work hour locations
-     * 
-     * @param call Capacitor plugin call
-     */
+
     @PluginMethod
     public void clearQueuedWorkHourLocations(PluginCall call) {
-        try {
-            queuedWorkHourLocations.clear();
-            call.resolve();
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Error clearing queued work hour locations", e);
-            call.reject("Error clearing queued work hour locations: " + e.getMessage());
-        }
+        workHourMirror.clear();
+        call.resolve();
     }
-    
+
     // =================================================================================
-    // LOCATION DATA METHODS
+    // CURRENT LOCATION (single-shot and progressive accuracy)
     // =================================================================================
-    
+
     /**
-     * Get current device location
-     * 
-     * @param call Capacitor plugin call
+     * Without {@code targetAccuracy}: resolves with the first fresh fix.
+     *
+     * With {@code targetAccuracy} (meters): streams every incoming fix as a
+     * "currentLocation" event (so the UI can show the position refining live) until a
+     * fix meets the target accuracy — that fix resolves the call. On timeout the best
+     * fix seen so far is resolved with {@code timedOut: true}, or the call rejects
+     * with LOCATION_UNAVAILABLE when nothing usable arrived at all.
      */
     @PluginMethod
     public void getCurrentLocation(PluginCall call) {
+        if (!permissionManager.hasForegroundLocationPermission()) {
+            call.reject("Location permission not granted", ErrorCodes.PERMISSION_DENIED);
+            return;
+        }
         try {
-            if (!permissionManager.hasLocationPermissions()) {
-                call.reject("Location permissions not granted");
+            if (!isLocationEnabled().getBoolean("enabled")) {
+                call.reject("Device location services are disabled", ErrorCodes.LOCATION_SERVICES_DISABLED);
                 return;
             }
-            
-            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+        } catch (Exception ignored) {
+        }
+
+        Float targetAccuracy = call.getFloat("targetAccuracy");
+        long timeout = call.getLong("timeout", DEFAULT_CURRENT_LOCATION_TIMEOUT_MS);
+
+        if (targetAccuracy == null) {
+            getSingleShotLocation(call, timeout);
+        } else {
+            startProgressiveWatch(call, targetAccuracy, timeout);
+        }
+    }
+
+    /** Cancels an in-flight progressive getCurrentLocation() request, if any. */
+    @PluginMethod
+    public void cancelCurrentLocationRequest(PluginCall call) {
+        cancelCurrentWatch("Cancelled by cancelCurrentLocationRequest()");
+        call.resolve();
+    }
+
+    private void getSingleShotLocation(PluginCall call, long timeout) {
+        try {
+            CurrentLocationRequest request = new CurrentLocationRequest.Builder()
+                .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+                .setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
+                .setDurationMillis(timeout)
+                .setMaxUpdateAgeMillis(5000)
+                .build();
+            fusedLocationClient.getCurrentLocation(request, null)
                 .addOnSuccessListener(location -> {
                     if (location != null) {
-                        JSObject result = new JSObject();
-                        result.put("latitude", location.getLatitude());
-                        result.put("longitude", location.getLongitude());
-                        result.put("accuracy", location.getAccuracy());
-                        result.put("altitude", location.getAltitude());
-                        result.put("speed", location.getSpeed());
-                        result.put("heading", location.getBearing());
-                        result.put("timestamp", location.getTime());
-                        call.resolve(result);
+                        call.resolve(locationToJSObject(location, false, false));
                     } else {
-                        call.reject("Failed to get current location");
+                        call.reject("Failed to get current location", ErrorCodes.LOCATION_UNAVAILABLE);
                     }
                 })
                 .addOnFailureListener(e -> {
                     Log.e(TAG, "Error getting current location", e);
-                    call.reject("Error getting current location: " + e.getMessage());
+                    call.reject("Error getting current location: " + e.getMessage(), ErrorCodes.LOCATION_UNAVAILABLE);
                 });
-                
+        } catch (SecurityException e) {
+            call.reject("Location permission not granted", ErrorCodes.PERMISSION_DENIED);
         } catch (Exception e) {
             Log.e(TAG, "Error in getCurrentLocation", e);
-            call.reject("Error getting current location: " + e.getMessage());
+            call.reject("Error getting current location: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    /**
-     * Get stored locations for a specific reference
-     * 
-     * @param call Capacitor plugin call with parameter: reference
-     */
+
+    private synchronized void startProgressiveWatch(PluginCall call, float targetAccuracy, long timeout) {
+        cancelCurrentWatch("Superseded by a newer getCurrentLocation() request");
+
+        CurrentLocationWatcher watcher =
+            new CurrentLocationWatcher(targetAccuracy, timeout, System.currentTimeMillis());
+        currentWatcher = watcher;
+        currentWatchCall = call;
+
+        currentWatchCallback = new LocationCallback() {
+            @Override
+            public void onLocationResult(LocationResult locationResult) {
+                for (Location location : locationResult.getLocations()) {
+                    handleWatchFix(watcher, location);
+                }
+            }
+        };
+
+        LocationRequest request = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
+            .setMinUpdateIntervalMillis(500L)
+            .setMinUpdateDistanceMeters(0f)
+            .setMaxUpdateAgeMillis(2000)
+            .build();
+
+        try {
+            fusedLocationClient.requestLocationUpdates(request, currentWatchCallback, Looper.getMainLooper());
+        } catch (SecurityException e) {
+            clearWatchState();
+            call.reject("Location permission not granted", ErrorCodes.PERMISSION_DENIED);
+            return;
+        }
+
+        currentWatchTimeout = () -> finishWatchOnTimeout(watcher);
+        mainHandler.postDelayed(currentWatchTimeout, watcher.getTimeoutMs());
+    }
+
+    private synchronized void handleWatchFix(CurrentLocationWatcher watcher, Location location) {
+        if (watcher != currentWatcher) {
+            return; // A newer request replaced this watch.
+        }
+        CurrentLocationWatcher.Fix fix = new CurrentLocationWatcher.Fix(
+            location.getLatitude(), location.getLongitude(), location.getAccuracy(),
+            location.getAltitude(), location.getSpeed(), location.getBearing(), location.getTime());
+
+        CurrentLocationWatcher.Decision decision = watcher.onFix(fix);
+        if (decision == CurrentLocationWatcher.Decision.IGNORE) {
+            return;
+        }
+
+        boolean isFinal = decision == CurrentLocationWatcher.Decision.COMPLETE;
+        JSObject event = fixToJSObject(fix, isFinal, false);
+        event.put("targetAccuracy", watcher.getTargetAccuracyMeters());
+        notifyListeners("currentLocation", event);
+
+        if (isFinal) {
+            PluginCall call = currentWatchCall;
+            stopWatchUpdates();
+            clearWatchState();
+            if (call != null) {
+                call.resolve(fixToJSObject(fix, true, false));
+            }
+        }
+    }
+
+    private synchronized void finishWatchOnTimeout(CurrentLocationWatcher watcher) {
+        if (watcher != currentWatcher) {
+            return;
+        }
+        PluginCall call = currentWatchCall;
+        CurrentLocationWatcher.Fix best = watcher.getBest();
+        stopWatchUpdates();
+        clearWatchState();
+        if (call == null) {
+            return;
+        }
+        if (best != null) {
+            JSObject result = fixToJSObject(best, true, true);
+            notifyListeners("currentLocation", result);
+            call.resolve(result);
+        } else {
+            call.reject("Could not obtain a location fix within the timeout", ErrorCodes.LOCATION_UNAVAILABLE);
+        }
+    }
+
+    private synchronized void cancelCurrentWatch(String reason) {
+        if (currentWatcher == null) {
+            return;
+        }
+        PluginCall pending = currentWatchCall;
+        stopWatchUpdates();
+        clearWatchState();
+        if (pending != null && reason != null) {
+            pending.reject(reason, ErrorCodes.CANCELLED);
+        }
+    }
+
+    private void stopWatchUpdates() {
+        if (currentWatchCallback != null && fusedLocationClient != null) {
+            fusedLocationClient.removeLocationUpdates(currentWatchCallback);
+        }
+        if (currentWatchTimeout != null) {
+            mainHandler.removeCallbacks(currentWatchTimeout);
+        }
+    }
+
+    private void clearWatchState() {
+        currentWatcher = null;
+        currentWatchCall = null;
+        currentWatchCallback = null;
+        currentWatchTimeout = null;
+    }
+
+    private JSObject fixToJSObject(CurrentLocationWatcher.Fix fix, boolean isFinal, boolean timedOut) {
+        JSObject data = new JSObject();
+        data.put("latitude", fix.latitude);
+        data.put("longitude", fix.longitude);
+        data.put("accuracy", fix.accuracy);
+        data.put("altitude", fix.altitude);
+        data.put("speed", fix.speed);
+        data.put("heading", fix.heading);
+        data.put("timestamp", fix.timestamp);
+        data.put("isFinal", isFinal);
+        data.put("timedOut", timedOut);
+        return data;
+    }
+
+    private JSObject locationToJSObject(Location location, boolean isFinal, boolean timedOut) {
+        JSObject data = new JSObject();
+        data.put("latitude", location.getLatitude());
+        data.put("longitude", location.getLongitude());
+        data.put("accuracy", location.getAccuracy());
+        data.put("altitude", location.getAltitude());
+        data.put("speed", location.getSpeed());
+        data.put("heading", location.getBearing());
+        data.put("timestamp", location.getTime());
+        data.put("isFinal", isFinal);
+        data.put("timedOut", timedOut);
+        return data;
+    }
+
+    // =================================================================================
+    // STORED LOCATION DATA
+    // =================================================================================
+
     @PluginMethod
     public void getStoredLocations(PluginCall call) {
         try {
-            if (!call.getData().has("reference")) {
-                call.reject("Missing required 'reference' parameter");
+            String reference = call.getString("reference");
+            if (reference == null || reference.trim().isEmpty()) {
+                call.reject("Missing required 'reference' parameter", ErrorCodes.MISSING_PARAMETER);
                 return;
             }
-            
-            String reference = call.getString("reference");
             JSObject result = new JSObject();
             result.put("locations", database.getLocationsForReference(reference));
             call.resolve(result);
-            
         } catch (Exception e) {
             Log.e(TAG, "Error getting stored locations", e);
-            call.reject("Error getting stored locations: " + e.getMessage());
+            call.reject("Error getting stored locations: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    /**
-     * Clear all stored locations
-     * 
-     * @param call Capacitor plugin call
-     */
+
     @PluginMethod
     public void clearStoredLocations(PluginCall call) {
         try {
             dataManager.clearStoredLocations(null);
             call.resolve();
-            
         } catch (Exception e) {
             Log.e(TAG, "Error clearing stored locations", e);
-            call.reject("Error clearing stored locations: " + e.getMessage());
+            call.reject("Error clearing stored locations: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    /**
-     * Get the last location for a specific reference
-     * 
-     * @param call Capacitor plugin call with parameter: reference
-     */
+
     @PluginMethod
     public void getLastLocation(PluginCall call) {
         try {
-            if (!call.getData().has("reference")) {
-                call.reject("Missing required 'reference' parameter");
+            String reference = call.getString("reference");
+            if (reference == null || reference.trim().isEmpty()) {
+                call.reject("Missing required 'reference' parameter", ErrorCodes.MISSING_PARAMETER);
                 return;
             }
-            
-            String reference = call.getString("reference");
             LocationItem location = database.getLastLocation(reference);
-            
             if (location != null) {
                 JSObject result = dataManager.locationItemToJSObject(location);
                 notifyListeners("locationUpdate", result);
                 call.resolve(result);
             } else {
-                call.reject("No location found for reference: " + reference);
+                call.reject("No location found for reference: " + reference, ErrorCodes.NOT_FOUND);
             }
-            
         } catch (Exception e) {
             Log.e(TAG, "Error getting last location", e);
-            call.reject("Error getting last location: " + e.getMessage());
+            call.reject("Error getting last location: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
+
     // =================================================================================
-    // LOCATION STATUS METHODS
+    // LOCATION SERVICES STATUS
     // =================================================================================
-    
+
     /**
-     * Start monitoring location service status changes
-     * 
-     * @param call Capacitor plugin call
+     * Starts monitoring the device location-services toggle. Reading provider state
+     * needs no runtime permission, so this works before permissions are granted —
+     * useful for showing an "enable location" banner on first launch.
      */
     @PluginMethod
     public void startLocationStatusTracking(PluginCall call) {
         try {
-            if (!permissionManager.hasLocationPermissions()) {
-                requestLocationStatusPermissions(call);
-                return;
-            }
-            
             if (locationStateReceiver == null) {
                 locationStateReceiver = new LocationStateReceiver();
                 IntentFilter filter = new IntentFilter(LocationManager.PROVIDERS_CHANGED_ACTION);
                 getContext().registerReceiver(locationStateReceiver, filter);
             }
-            
-            // Send initial status
             try {
                 pushLocationStateToCapacitor(isLocationEnabled().getBoolean("enabled"));
-            } catch (JSONException e) {
+            } catch (Exception e) {
                 pushLocationStateToCapacitor(false);
             }
-            
             call.resolve();
-            
         } catch (Exception e) {
             Log.e(TAG, "Error starting location status tracking", e);
-            call.reject("Error starting location status tracking: " + e.getMessage());
+            call.reject("Error starting location status tracking: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    @PermissionCallback
-    private void requestLocationStatusPermissions(PluginCall call) {
-        if (android.os.Build.VERSION.SDK_INT >= 34) { // Android 14+
-            requestPermissionForAlias("foregroundLocationNew", call, "startLocationStatusTracking");
-        } else {
-            requestPermissionForAlias("foregroundLocation", call, "startLocationStatusTracking");
-        }
-    }
-    
-    /**
-     * Stop monitoring location service status changes
-     * 
-     * @param call Capacitor plugin call
-     */
+
     @PluginMethod
     public void stopLocationStatusTracking(PluginCall call) {
         try {
@@ -679,49 +738,32 @@ public class BackgroundLocationPlugin extends Plugin {
                 locationStateReceiver = null;
             }
             call.resolve();
-            
         } catch (Exception e) {
             Log.e(TAG, "Error stopping location status tracking", e);
-            call.reject("Error stopping location status tracking: " + e.getMessage());
+            call.reject("Error stopping location status tracking: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
         }
     }
-    
-    // =================================================================================
-    // UTILITY METHODS
-    // =================================================================================
-    
-    /**
-     * Check if device location services are enabled
-     * 
-     * @return JSObject with enabled status
-     */
+
     public JSObject isLocationEnabled() {
         LocationManager locationManager = (LocationManager) getContext().getSystemService(Context.LOCATION_SERVICE);
-        boolean isLocationEnabled = locationManager != null && 
-            (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
-             locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
-        
+        boolean enabled = locationManager != null
+            && (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                || locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
         JSObject data = new JSObject();
-        data.put("enabled", isLocationEnabled);
+        data.put("enabled", enabled);
         return data;
     }
-    
-    /**
-     * Notify Capacitor listeners about location status changes
-     * 
-     * @param status Location service enabled status
-     */
+
+    // =================================================================================
+    // EVENT BRIDGES (called by receivers and the uploader)
+    // =================================================================================
+
     public void pushLocationStateToCapacitor(boolean status) {
         JSObject data = new JSObject();
         data.put("enabled", status);
         notifyListeners("locationStatus", data);
     }
-    
-    /**
-     * Push location update to Capacitor (called by LocationBroadcastReceiver)
-     *
-     * @param locationItem Location item from background service
-     */
+
     public void pushUpdateToCapacitor(LocationItem locationItem) {
         JSObject result = new JSObject();
         result.put("reference", locationItem.reference);
@@ -735,19 +777,22 @@ public class BackgroundLocationPlugin extends Plugin {
         result.put("altitudeAccuracy", locationItem.altitudeAccuracy);
         result.put("totalDistance", locationItem.totalDistance);
         result.put("timestamp", locationItem.timestamp);
-
         notifyListeners("locationUpdate", result);
     }
 
-    /**
-     * Add work hour location to queue (called by WorkHourLocationUploader)
-     * 
-     * @param location Work hour location data
-     */
-    public void addToWorkHourQueue(WorkHourLocationData location) {
-        queuedWorkHourLocations.add(location);
-        
-        // Notify Capacitor about new work hour location
+    /** Forward a typed error raised by a service to the JavaScript "error" event. */
+    public void pushErrorToCapacitor(String code, String message, String source, boolean fatal) {
+        JSObject data = new JSObject();
+        data.put("code", code != null ? code : ErrorCodes.INTERNAL_ERROR);
+        data.put("message", message != null ? message : "Unknown error");
+        data.put("source", source != null ? source : ErrorCodes.SOURCE_TASK_TRACKING);
+        data.put("fatal", fatal);
+        notifyListeners("error", data);
+    }
+
+    /** Called by the uploader whenever a fix enters the work-hour queue. */
+    public void notifyWorkHourLocationQueued(WorkHourLocationData location) {
+        workHourMirror.add(location);
         JSObject data = new JSObject();
         data.put("latitude", location.latitude);
         data.put("longitude", location.longitude);
@@ -756,31 +801,35 @@ public class BackgroundLocationPlugin extends Plugin {
         data.put("engineerId", location.engineerId);
         notifyListeners("workHourLocationUpdate", data);
     }
-    
-    /**
-     * Remove uploaded locations from queue (called by WorkHourLocationUploader)
-     * 
-     * @param uploadedLocations Locations that were successfully uploaded
-     */
-    public void removeFromWorkHourQueue(List<WorkHourLocationData> uploadedLocations) {
-        queuedWorkHourLocations.removeAll(uploadedLocations);
+
+    /** Called by the uploader after an upload attempt for a batch. */
+    public void notifyWorkHourUploadResult(List<WorkHourLocationData> batch, boolean success, String error) {
+        if (success) {
+            workHourMirror.removeAll(new ArrayList<>(batch));
+        }
+        JSObject data = new JSObject();
+        data.put("success", success);
+        data.put("count", batch.size());
+        if (error != null) {
+            data.put("error", error);
+        }
+        notifyListeners("workHourLocationUploaded", data);
     }
-    
+
     // =================================================================================
     // DATA CLASSES
     // =================================================================================
-    
-    /**
-     * Work hour location data container
-     */
+
+    /** Work hour location data container. */
     public static class WorkHourLocationData {
         public double latitude;
         public double longitude;
         public float accuracy;
         public long timestamp;
         public String engineerId;
-        
-        public WorkHourLocationData(double latitude, double longitude, float accuracy, long timestamp, String engineerId) {
+
+        public WorkHourLocationData(double latitude, double longitude, float accuracy, long timestamp,
+                String engineerId) {
             this.latitude = latitude;
             this.longitude = longitude;
             this.accuracy = accuracy;

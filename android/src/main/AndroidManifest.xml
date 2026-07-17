@@ -1,43 +1,36 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Location permissions -->
+    <!-- Location permissions. These merge into the consuming app's manifest, so only
+         what this plugin genuinely needs is declared (least privilege). -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-    
-    <!-- Foreground service permissions -->
+
+    <!-- Foreground service (Android 14+ additionally requires the typed permission) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    
-    <!-- Alarm manager permission for service restart -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-    
-    <!-- Network permissions -->
+
+    <!-- Work-hour uploads -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-    <uses-permission android:name="android.permission.CAMERA" />
 
     <application>
-        <!-- Background Location Service -->
-        <service 
+        <!-- Task tracking service -->
+        <service
             android:name=".BackgroundLocationService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
-            
-        <!-- Work Hour Location Service -->
-        <service 
+
+        <!-- Work hour tracking service -->
+        <service
             android:name=".WorkHourLocationService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
-            
-        <!-- Service Restart Receiver -->
-        <receiver 
+
+        <!-- Restart watchdog (explicit PendingIntent broadcasts, so manifest
+             registration works even when the process is dead) -->
+        <receiver
             android:name=".ServiceRestartReceiver"
             android:enabled="true"
             android:exported="false">

@@ -8,48 +8,58 @@ import android.util.Log;
 import java.util.List;
 
 /**
- * BroadcastReceiver that handles service restart mechanism
- * This receiver is triggered periodically to check if the BackgroundLocationService is running
- * and restart it if necessary.
+ * Periodic watchdog (fired by AlarmManager) that restarts the tracking service if the
+ * system killed it while a session is still wanted.
+ *
+ * Restart is attempted only when the persisted state says tracking is active AND the
+ * permissions required for a background start are present. Blindly restarting used to
+ * spin up a service that immediately stopped itself without startForeground(), which
+ * crashed the app every 30 minutes.
  */
 public class ServiceRestartReceiver extends BroadcastReceiver {
     private static final String TAG = "ServiceRestartReceiver";
-    
+
+    public static final String ACTION_RESTART = "com.elsapiens.backgroundlocation.RESTART_SERVICE";
+
     @Override
     public void onReceive(Context context, Intent intent) {
-        if ("com.elsapiens.backgroundlocation.RESTART_SERVICE".equals(intent.getAction())) {
-            Log.d(TAG, "Service restart check triggered");
-            
-            // Check if the BackgroundLocationService is running
-            if (!isServiceRunning(context, BackgroundLocationService.class)) {
-                Log.i(TAG, "BackgroundLocationService is not running, attempting to restart");
-                
-                try {
-                    // Restart the service
-                    Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
-                    serviceIntent.putExtra("reference", "auto_restart");
-                    serviceIntent.putExtra("interval", 3000L);
-                    serviceIntent.putExtra("minDistance", 10.0f);
-                    serviceIntent.putExtra("highAccuracy", true);
-                    
-                    context.startForegroundService(serviceIntent);
-                    Log.i(TAG, "BackgroundLocationService restart initiated");
-                } catch (Exception e) {
-                    Log.e(TAG, "Failed to restart BackgroundLocationService", e);
-                }
-            } else {
-                Log.d(TAG, "BackgroundLocationService is already running");
-            }
+        if (!ACTION_RESTART.equals(intent.getAction())) {
+            return;
+        }
+
+        TrackingStateStore stateStore = new TrackingStateStore(new SharedPrefsKeyValueStore(context));
+        if (!stateStore.isTaskTrackingActive()) {
+            Log.d(TAG, "No active tracking session; skipping restart");
+            return;
+        }
+
+        LocationPermissionManager permissions = new LocationPermissionManager(context);
+        if (!permissions.hasForegroundLocationPermission()) {
+            Log.w(TAG, "Location permission missing; cannot restart tracking service");
+            return;
+        }
+        if (!permissions.hasBackgroundLocationPermission()) {
+            // A foreground-service-location start from the background requires
+            // "Allow all the time"; without it the start would throw.
+            Log.w(TAG, "Background location permission missing; cannot restart from background");
+            return;
+        }
+
+        if (isServiceRunning(context, BackgroundLocationService.class)) {
+            Log.d(TAG, "BackgroundLocationService is already running");
+            return;
+        }
+
+        try {
+            // Parameters are restored by the service from the state store.
+            Intent serviceIntent = new Intent(context, BackgroundLocationService.class);
+            context.startForegroundService(serviceIntent);
+            Log.i(TAG, "BackgroundLocationService restart initiated");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to restart BackgroundLocationService", e);
         }
     }
-    
-    /**
-     * Check if a specific service is currently running
-     * 
-     * @param context The application context
-     * @param serviceClass The service class to check
-     * @return true if the service is running, false otherwise
-     */
+
     private boolean isServiceRunning(Context context, Class<?> serviceClass) {
         ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         if (manager != null) {

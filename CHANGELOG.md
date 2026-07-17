@@ -5,6 +5,87 @@ All notable changes to the Elsapiens Background Location Plugin are documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-07-17
+
+### Fixed (crashes)
+- **App no longer crashes when the user grants only "While using the app"**: both
+  foreground services promote themselves with `startForeground()` FIRST and stop
+  gracefully on permission problems. Previously the service stopped itself without
+  ever calling `startForeground()`, and Android killed the whole app with
+  `ForegroundServiceDidNotStartInTimeException` — repeatedly, via the sticky
+  restart and the 30-minute watchdog alarm.
+- Restart receivers (`ServiceRestartReceiver`, boot/task-removed paths) now check
+  the persisted session state and permissions before attempting a restart, ending
+  the background crash loop.
+- Work-hour uploader no longer NPE-crashes when the plugin instance is gone
+  (app process killed, service restarted standalone).
+- `SecurityException` from revoked permissions during tracking is caught and
+  surfaced as an `error` event instead of crashing.
+
+### Fixed (correctness)
+- **Tracking now works with foreground-only permission**: previously the service
+  demanded `ACCESS_BACKGROUND_LOCATION` and silently recorded nothing (and then
+  crashed). Background permission is only needed for background restarts and its
+  absence is reported, not fatal.
+- **Approximate location supported**: permission checks were FINE AND COARSE, so
+  the Android 12+ "Approximate" choice disabled tracking entirely; now fine OR
+  coarse suffices and the granted accuracy tier is reported.
+- **Work-hour tracking actually works in the background**: `startWorkHourTracking`
+  never started its foreground service (sampling died with the app process), and
+  the uploader always uploaded an empty list — no fix ever reached the server.
+- **Duplicate location events fixed**: the service registered a second
+  `LocationBroadcastReceiver` in the same process, delivering every fix twice.
+- **Duplicate route points fixed**: task tracking ran a second, in-process pipeline
+  writing the same fixes to the same SQLite table as the service.
+- **Distance no longer inflated**: travelled distance was accumulated before the
+  accuracy filter, double-counting stretches around rejected fixes. It is now
+  computed over accepted fixes only and resumes correctly after service restarts.
+- System restarts no longer corrupt sessions with `default_reference` /
+  `auto_restart` references — parameters persist in `TrackingStateStore` and are
+  restored on every restart path.
+- If the user toggles device location services off mid-session, the service now
+  waits and resumes automatically when they are re-enabled.
+
+### Added
+- **Typed error contract**: every rejection carries a machine-readable `code`
+  (`PERMISSION_DENIED`, `BACKGROUND_PERMISSION_DENIED`,
+  `LOCATION_SERVICES_DISABLED`, `SERVICE_START_FAILED`, `LOCATION_UNAVAILABLE`,
+  `MISSING_PARAMETER`, `NOT_FOUND`, `CANCELLED`, `INTERNAL_ERROR`), and a new
+  `error` event reports asynchronous failures with `source` and `fatal` flags.
+- **Progressive-accuracy `getCurrentLocation({ targetAccuracy, timeout })`**:
+  streams live fixes as `currentLocation` events until the requested accuracy is
+  met; resolves the best fix on timeout. `cancelCurrentLocationRequest()` cancels.
+- `requestPermissions({ permissions })` can request the foreground and background
+  tiers separately (recommended incremental UX on Android 11+).
+- `checkPermissions()` now reports the granted accuracy tier (`fine`/`coarse`/
+  `none`) and real `prompt`/`denied` states.
+- `getTrackingStatus()` to resync UI with the native session after app restarts.
+- `openDeviceLocationSettings()` for the GPS-off case.
+- `startTracking` options: `maxAccuracy` (fix filter), `notificationTitle`,
+  `notificationText`; resolves `{ backgroundLocationGranted, accuracy }`.
+- Bounded, service-owned work-hour upload queue with real batch uploads, retry
+  and offline handling; `workHourLocationUploaded` now reports `{ success, count,
+  error? }`.
+- Unit test suite for the extracted pure logic (filtering, distance, progressive
+  accuracy watcher, queue, state store) — 33 tests.
+- Web implementation backed by the real W3C Geolocation API, matching the native
+  error contract.
+
+### Changed
+- Internals reorganised along SOLID lines: `LocationFilter`, `DistanceTracker`,
+  `CurrentLocationWatcher`, `WorkHourLocationQueue`, `TrackingStateStore` (behind
+  `KeyValueStore`), `NotificationFactory`, `ErrorCodes` — services and plugin
+  delegate instead of duplicating logic. `LocationCoordinator` (dead second
+  pipeline) removed.
+- Plugin manifest trimmed to least privilege: removed `CAMERA`,
+  `READ_PHONE_STATE`, WiFi-state and exact-alarm permissions that leaked into
+  consuming apps.
+- `startLocationStatusTracking()` no longer demands location permission (reading
+  the GPS toggle requires none), so an "enable location" banner can be shown
+  before any permission prompt.
+- Tracking sessions survive the WebView/plugin being destroyed: the plugin no
+  longer stops the services in `handleOnDestroy`.
+
 ## [Unreleased]
 
 ### Added

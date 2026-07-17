@@ -1,164 +1,291 @@
 import { WebPlugin } from '@capacitor/core';
 
-import type { BackgroundLocationPlugin, LocationData, PermissionStatus } from './definitions';
+import type {
+  BackgroundLocationPlugin,
+  CurrentLocation,
+  CurrentLocationOptions,
+  LocationData,
+  PermissionStatus,
+  RequestPermissionsOptions,
+  StartTrackingOptions,
+  StartTrackingResult,
+  TrackingStatus,
+  WorkHourLocationData,
+  WorkHourTrackingOptions,
+} from './definitions';
 
+/**
+ * Browser implementation backed by the W3C Geolocation API.
+ *
+ * Real background tracking and work-hour uploads are native-only; on the web this
+ * implementation records fixes in memory while the page is open so app code can be
+ * developed and demoed in a browser. Error codes match the native contract.
+ */
 export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocationPlugin {
   private locations: LocationData[] = [];
+  private reference = 'web-tracking';
+  private watchId: number | null = null;
   private tracking = false;
-  private interval: any = null;
-  private reference = 'my-tracking';
+  private currentWatchId: number | null = null;
+  private totalDistanceKm = 0;
 
-  constructor() {
-    super();
-  }
-
-  // New permission methods for web
   async checkPermissions(): Promise<PermissionStatus> {
-    // Web platform permissions simulation
+    let location: PermissionStatus['location'] = 'prompt';
+    try {
+      if (navigator.permissions) {
+        const result = await navigator.permissions.query({ name: 'geolocation' as PermissionName });
+        location = result.state === 'granted' ? 'granted' : result.state === 'denied' ? 'denied' : 'prompt';
+      }
+    } catch {
+      // permissions API unavailable — leave as prompt
+    }
     return {
-      location: 'granted',
-      backgroundLocation: 'granted', 
-      foregroundService: 'granted'
+      location,
+      backgroundLocation: location, // No separate tier on the web
+      accuracy: location === 'granted' ? 'fine' : 'none',
+      foregroundService: 'granted',
     };
   }
 
-  async requestPermissions(): Promise<PermissionStatus> {
-    // Web platform doesn't need actual permission requests
+  async requestPermissions(options?: RequestPermissionsOptions): Promise<PermissionStatus> {
+    void options; // Web has a single permission tier; both requests map to the browser prompt.
+    // The browser prompts on first geolocation use; trigger one to surface the dialog.
+    await new Promise<void>((resolve) => {
+      if (!navigator.geolocation) return resolve();
+      navigator.geolocation.getCurrentPosition(() => resolve(), () => resolve(), { timeout: 10000 });
+    });
     return this.checkPermissions();
   }
 
   async isLocationServiceEnabled(): Promise<{ enabled: boolean }> {
-    // Web platform location services simulation
-    return { enabled: true };
+    return { enabled: !!navigator.geolocation };
   }
 
   async openLocationSettings(): Promise<void> {
-    // Web platform doesn't have location settings
-    console.warn('Location settings not available on web platform');
-    return Promise.resolve();
+    console.warn('BackgroundLocation: openLocationSettings is not available on web');
   }
 
-  startLocationStatusTracking(): Promise<void> {
-    setTimeout(() => {
-      this.notifyListeners('locationStatus', { enabled: true });
-    }, 10);
-    return Promise.resolve();
-  }
-  
-  stopLocationStatusTracking(): Promise<void> {
-    return Promise.resolve();
+  async openDeviceLocationSettings(): Promise<void> {
+    console.warn('BackgroundLocation: openDeviceLocationSettings is not available on web');
   }
 
-  async startTracking({ reference }: { reference: string }): Promise<void> {
-    this.reference = reference;
+  async startTracking(options: StartTrackingOptions): Promise<StartTrackingResult> {
+    if (!options?.reference) {
+      throw this.buildError('Missing required reference parameter', 'MISSING_PARAMETER');
+    }
+    if (!navigator.geolocation) {
+      throw this.buildError('Geolocation is not available in this browser', 'LOCATION_SERVICES_DISABLED');
+    }
+    this.stopWatch();
+    this.reference = options.reference;
     this.tracking = true;
-    this.simulateLocationTracking();
+    this.totalDistanceKm = 0;
+
+    const maxAccuracy = options.maxAccuracy ?? 30;
+    this.watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (!this.tracking) return;
+        if (pos.coords.accuracy > maxAccuracy) return;
+        const previous = this.locations.length
+          ? this.locations[this.locations.length - 1]
+          : undefined;
+        if (previous) {
+          this.totalDistanceKm += haversineKm(
+            previous.latitude, previous.longitude,
+            pos.coords.latitude, pos.coords.longitude,
+          );
+        }
+        const data: LocationData = {
+          reference: this.reference,
+          index: this.locations.length,
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          altitude: pos.coords.altitude ?? undefined,
+          speed: pos.coords.speed ?? undefined,
+          heading: pos.coords.heading ?? undefined,
+          totalDistance: this.totalDistanceKm,
+          timestamp: pos.timestamp,
+        };
+        this.locations.push(data);
+        this.notifyListeners('locationUpdate', data);
+      },
+      (err) => {
+        this.notifyListeners('error', {
+          code: err.code === err.PERMISSION_DENIED ? 'PERMISSION_DENIED' : 'LOCATION_UNAVAILABLE',
+          message: err.message,
+          source: 'taskTracking',
+          fatal: err.code === err.PERMISSION_DENIED,
+        });
+      },
+      { enableHighAccuracy: options.highAccuracy ?? true },
+    );
+
+    return { backgroundLocationGranted: false, accuracy: 'fine' };
   }
 
   async stopTracking(): Promise<void> {
     this.tracking = false;
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-    }
+    this.stopWatch();
   }
 
-  async getStoredLocations({ reference }: { reference: string }): Promise<{ locations: LocationData[] }> {
-    return { locations: this.locations.filter((location) => location.reference === reference) };
-  }
-
-  async getCurrentLocation(): Promise<{
-    latitude: number;
-    longitude: number;
-    accuracy: number;
-    altitude?: number;
-    speed?: number;
-    heading?: number;
-    timestamp: number;
-  }> {
+  async getTrackingStatus(): Promise<TrackingStatus> {
     return {
-      latitude: 37.7749,
-      longitude: -122.4194,
-      accuracy: 5,
-      altitude: 10,
-      speed: 0,
-      heading: 0,
-      timestamp: Date.now(),
+      isTracking: this.tracking,
+      isWorkHourTracking: false,
+      reference: this.tracking ? this.reference : null,
     };
+  }
+
+  async getCurrentLocation(options?: CurrentLocationOptions): Promise<CurrentLocation> {
+    if (!navigator.geolocation) {
+      throw this.buildError('Geolocation is not available in this browser', 'LOCATION_SERVICES_DISABLED');
+    }
+    const timeout = options?.timeout ?? 30000;
+    const target = options?.targetAccuracy;
+
+    if (target === undefined) {
+      return new Promise<CurrentLocation>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve(toCurrentLocation(pos, true, false)),
+          (err) => reject(this.buildError(err.message,
+            err.code === err.PERMISSION_DENIED ? 'PERMISSION_DENIED' : 'LOCATION_UNAVAILABLE')),
+          { enableHighAccuracy: true, timeout },
+        );
+      });
+    }
+
+    // Progressive accuracy: stream fixes until the target accuracy is met.
+    await this.cancelCurrentLocationRequest();
+    return new Promise<CurrentLocation>((resolve, reject) => {
+      let best: CurrentLocation | null = null;
+      const timer = window.setTimeout(() => {
+        this.stopCurrentWatch();
+        if (best) {
+          const finalFix = { ...best, isFinal: true, timedOut: true };
+          this.notifyListeners('currentLocation', finalFix);
+          resolve(finalFix);
+        } else {
+          reject(this.buildError('Could not obtain a location fix within the timeout', 'LOCATION_UNAVAILABLE'));
+        }
+      }, timeout);
+
+      this.currentWatchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const fix = toCurrentLocation(pos, pos.coords.accuracy <= target, false);
+          fix.targetAccuracy = target;
+          if (!best || fix.accuracy < best.accuracy) best = fix;
+          this.notifyListeners('currentLocation', fix);
+          if (fix.isFinal) {
+            window.clearTimeout(timer);
+            this.stopCurrentWatch();
+            resolve(fix);
+          }
+        },
+        (err) => {
+          window.clearTimeout(timer);
+          this.stopCurrentWatch();
+          reject(this.buildError(err.message,
+            err.code === err.PERMISSION_DENIED ? 'PERMISSION_DENIED' : 'LOCATION_UNAVAILABLE'));
+        },
+        { enableHighAccuracy: true },
+      );
+    });
+  }
+
+  async cancelCurrentLocationRequest(): Promise<void> {
+    this.stopCurrentWatch();
+  }
+
+  async getStoredLocations(options: { reference: string }): Promise<{ locations: LocationData[] }> {
+    return { locations: this.locations.filter((l) => l.reference === options.reference) };
   }
 
   async clearStoredLocations(): Promise<void> {
     this.locations = [];
   }
 
-  async getLastLocation({ reference }: { reference: string }): Promise<void> {
-    const locations = this.locations.filter((location) => location.reference === reference);
-    if (locations.length > 0) {
-      const lastLocation = locations[locations.length - 1];
-      this.notifyListeners('locationUpdate', lastLocation);
+  async getLastLocation(options: { reference: string }): Promise<LocationData> {
+    const matches = this.locations.filter((l) => l.reference === options.reference);
+    const last = matches[matches.length - 1];
+    if (!last) {
+      throw this.buildError(`No location found for reference: ${options.reference}`, 'NOT_FOUND');
     }
+    this.notifyListeners('locationUpdate', last);
+    return last;
   }
 
-  private simulateLocationTracking(): void {
-    if (!this.tracking) return;
-
-    // Simulate adding a new location every second
-    let latitude = 37.7749; // Starting latitude
-    let longitude = -122.4194; // Starting longitude
-    const direction = 0.001; // Change in position
-
-    if (this.interval) {
-      clearInterval(this.interval); // ✅ Properly clear the previous interval
-    }
-    this.interval = setInterval(() => {
-      if (this.tracking) {
-        latitude += direction * (Math.random() > 0.5 ? 1 : -1);
-        longitude += direction * (Math.random() > 0.5 ? 1 : -1);
-
-        const newLocation: LocationData = {
-          reference: this.reference,
-          index: this.locations.length,
-          latitude,
-          longitude,
-          timestamp: Date.now(),
-          accuracy: Math.random() * 10,
-          speed: Math.random() * 30,
-        };
-        this.locations.push(newLocation);
-        this.notifyListeners('locationUpdate', newLocation);
-      }
-    }, 2000);
+  async startLocationStatusTracking(): Promise<void> {
+    setTimeout(() => this.notifyListeners('locationStatus', { enabled: !!navigator.geolocation }), 10);
   }
 
-  // Work Hour Tracking methods (web stubs)
-  async startWorkHourTracking(options: {
-    engineerId: string;
-    uploadInterval?: number;
-    serverUrl: string;
-    authToken?: string;
-    enableOfflineQueue?: boolean;
-  }): Promise<void> {
-    console.warn('Work hour tracking not available on web platform', options);
-    return Promise.resolve();
+  async stopLocationStatusTracking(): Promise<void> {
+    // Nothing to stop on web.
+  }
+
+  async startWorkHourTracking(options: WorkHourTrackingOptions): Promise<StartTrackingResult> {
+    console.warn('BackgroundLocation: work-hour tracking is not available on web', options);
+    throw this.unavailable('Work-hour tracking requires the native Android platform.');
   }
 
   async stopWorkHourTracking(): Promise<void> {
-    console.warn('Work hour tracking not available on web platform');
-    return Promise.resolve();
+    // Nothing running on web.
   }
 
   async isWorkHourTrackingActive(): Promise<{ active: boolean }> {
-    console.warn('Work hour tracking not available on web platform');
     return { active: false };
   }
 
-  async getQueuedWorkHourLocations(): Promise<{ locations: any[] }> {
-    console.warn('Work hour tracking not available on web platform');
+  async getQueuedWorkHourLocations(): Promise<{ locations: WorkHourLocationData[] }> {
     return { locations: [] };
   }
 
   async clearQueuedWorkHourLocations(): Promise<void> {
-    console.warn('Work hour tracking not available on web platform');
-    return Promise.resolve();
+    // Nothing queued on web.
   }
+
+  private stopWatch(): void {
+    if (this.watchId !== null) {
+      navigator.geolocation.clearWatch(this.watchId);
+      this.watchId = null;
+    }
+  }
+
+  private stopCurrentWatch(): void {
+    if (this.currentWatchId !== null) {
+      navigator.geolocation.clearWatch(this.currentWatchId);
+      this.currentWatchId = null;
+    }
+  }
+
+  private buildError(message: string, code: string): Error {
+    const error = new Error(message) as Error & { code: string };
+    error.code = code;
+    return error;
+  }
+}
+
+function toCurrentLocation(pos: GeolocationPosition, isFinal: boolean, timedOut: boolean): CurrentLocation {
+  return {
+    latitude: pos.coords.latitude,
+    longitude: pos.coords.longitude,
+    accuracy: pos.coords.accuracy,
+    altitude: pos.coords.altitude ?? undefined,
+    speed: pos.coords.speed ?? undefined,
+    heading: pos.coords.heading ?? undefined,
+    timestamp: pos.timestamp,
+    isFinal,
+    timedOut,
+  };
+}
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }

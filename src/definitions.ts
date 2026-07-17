@@ -1,5 +1,169 @@
 import type { PluginListenerHandle } from "@capacitor/core";
 
+/**
+ * Permission state for a single permission tier.
+ *
+ * - `granted` — the user granted the permission.
+ * - `denied` — the user denied it; a new request will not show a dialog on Android,
+ *   send the user to settings with `openLocationSettings()` instead.
+ * - `prompt` — not asked yet; `requestPermissions()` will show the system dialog.
+ * - `prompt-with-rationale` — denied once; explain why before asking again.
+ */
+export type PermissionState = 'granted' | 'denied' | 'prompt' | 'prompt-with-rationale';
+
+/** Location accuracy tier the user granted (Android 12+ lets users pick "approximate"). */
+export type LocationAccuracyLevel = 'fine' | 'coarse' | 'none';
+
+/**
+ * Machine-readable error codes.
+ *
+ * Every rejected call carries one of these in the `code` property of the error, and
+ * every `error` event carries one in its `code` field — branch on the code, never on
+ * the human-readable message.
+ *
+ * | Code | Meaning | Recommended app reaction |
+ * |------|---------|--------------------------|
+ * | `PERMISSION_DENIED` | Foreground location permission missing | Call `requestPermissions()`; if state is `denied`, call `openLocationSettings()` |
+ * | `BACKGROUND_PERMISSION_DENIED` | "Allow all the time" missing | Explain why, then `requestPermissions({permissions: ['backgroundLocation']})` or `openLocationSettings()` |
+ * | `LOCATION_SERVICES_DISABLED` | Device GPS toggle is off | Prompt user; `openDeviceLocationSettings()` |
+ * | `MISSING_PARAMETER` | A required option was not provided | Fix the call site |
+ * | `SERVICE_START_FAILED` | Android refused to start the foreground service | Retry from the foreground; check battery restrictions |
+ * | `LOCATION_UNAVAILABLE` | No usable fix within the timeout | Retry, or ask the user to move to open sky |
+ * | `NOT_FOUND` | No stored data for the given reference | Treat as empty |
+ * | `CANCELLED` | Superseded/cancelled request | Usually ignorable |
+ * | `INTERNAL_ERROR` | Unexpected native failure | Log and report |
+ */
+export type ErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'BACKGROUND_PERMISSION_DENIED'
+  | 'LOCATION_SERVICES_DISABLED'
+  | 'MISSING_PARAMETER'
+  | 'SERVICE_START_FAILED'
+  | 'LOCATION_UNAVAILABLE'
+  | 'NOT_FOUND'
+  | 'CANCELLED'
+  | 'INTERNAL_ERROR';
+
+/** Which subsystem raised an asynchronous error event. */
+export type ErrorSource = 'taskTracking' | 'workHourTracking' | 'currentLocation' | 'permissions';
+
+/**
+ * Payload of the `error` event.
+ *
+ * Asynchronous failures — the tracking service losing its permission, the user
+ * switching GPS off mid-session, a failed service restart — cannot reject a promise,
+ * so they surface here. Fatal errors mean tracking stopped; non-fatal ones are
+ * warnings (e.g. background permission missing while tracking continues in the
+ * foreground).
+ */
+export interface PluginError {
+  code: ErrorCode;
+  message: string;
+  source: ErrorSource;
+  /** true when tracking stopped because of this error. */
+  fatal: boolean;
+}
+
+export interface PermissionStatus {
+  /** Foreground ("while in use") location permission. Granted when fine OR coarse is granted. */
+  location: PermissionState;
+  /** Background ("allow all the time") location permission. */
+  backgroundLocation: PermissionState;
+  /** Accuracy tier the user granted. `coarse` means approximate location only. */
+  accuracy: LocationAccuracyLevel;
+  /**
+   * Install-time FOREGROUND_SERVICE_LOCATION permission (Android 14+).
+   * `denied` means the host app's AndroidManifest.xml is missing the declaration —
+   * an integration error, not something the user can fix.
+   */
+  foregroundService: 'granted' | 'denied';
+}
+
+export interface RequestPermissionsOptions {
+  /**
+   * Which permission tiers to request. Defaults to both, requested in the required
+   * order: foreground first (system dialog), then background (Android opens the
+   * app's location settings where the user picks "Allow all the time").
+   *
+   * Best practice: request `['location']` when tracking starts, and request
+   * `['backgroundLocation']` separately after explaining why you need it.
+   */
+  permissions?: ('location' | 'backgroundLocation')[];
+}
+
+export interface StartTrackingOptions {
+  /** Identifier the recorded route is stored under (e.g. a task id). Required. */
+  reference: string;
+  /** Requested update interval in milliseconds. Default 3000. */
+  interval?: number;
+  /** Minimum movement in meters between recorded fixes. Default 10. */
+  minDistance?: number;
+  /** true (default) = GPS-grade accuracy; false = balanced power. */
+  highAccuracy?: boolean;
+  /**
+   * Worst acceptable horizontal accuracy in meters; less accurate fixes are
+   * discarded instead of polluting the recorded route. Default 30.
+   */
+  maxAccuracy?: number;
+  /** Title of the persistent tracking notification. Defaults to an English string. */
+  notificationTitle?: string;
+  /** Body text of the persistent tracking notification. */
+  notificationText?: string;
+}
+
+export interface StartTrackingResult {
+  /**
+   * false when tracking started with foreground permission only. Tracking works
+   * while the service lives, but cannot recover from a background restart — ask the
+   * user for "Allow all the time" (see `BACKGROUND_PERMISSION_DENIED`).
+   */
+  backgroundLocationGranted: boolean;
+  /** Accuracy tier tracking runs at. Warn the user when it is `coarse`. */
+  accuracy: LocationAccuracyLevel;
+}
+
+export interface TrackingStatus {
+  /** true when a task tracking session is active (survives app restarts). */
+  isTracking: boolean;
+  /** true when work-hour tracking is active. */
+  isWorkHourTracking: boolean;
+  /** Reference of the active task session, or null. */
+  reference: string | null;
+}
+
+export interface CurrentLocationOptions {
+  /**
+   * Desired horizontal accuracy in meters. When set, the plugin keeps requesting
+   * fixes and emits each one as a `currentLocation` event (live, so the UI can show
+   * the position refining) until a fix meets this accuracy — that fix resolves the
+   * promise with `isFinal: true`. When omitted, the first fresh fix resolves.
+   */
+  targetAccuracy?: number;
+  /**
+   * Give-up time in milliseconds (default 30000). On timeout the most accurate fix
+   * seen so far resolves with `timedOut: true`; if nothing usable arrived the call
+   * rejects with `LOCATION_UNAVAILABLE`.
+   */
+  timeout?: number;
+}
+
+export interface CurrentLocation {
+  latitude: number;
+  longitude: number;
+  /** Horizontal accuracy of this fix in meters. */
+  accuracy: number;
+  altitude?: number;
+  speed?: number;
+  heading?: number;
+  timestamp: number;
+  /** true when this fix ended the request (target met or timeout). */
+  isFinal: boolean;
+  /** true when the request timed out before reaching the target accuracy. */
+  timedOut: boolean;
+  /** Echo of the requested target accuracy (only on `currentLocation` events). */
+  targetAccuracy?: number;
+}
+
 export interface LocationData {
   reference: string;
   index: number;
@@ -10,6 +174,7 @@ export interface LocationData {
   heading?: number;
   accuracy: number;
   altitudeAccuracy?: number;
+  /** Total distance travelled in this session, in kilometers. */
   totalDistance?: number;
   timestamp: number;
 }
@@ -18,77 +183,186 @@ export interface WorkHourLocationData {
   latitude: number;
   longitude: number;
   accuracy: number;
-  altitude?: number;
-  speed?: number;
-  heading?: number;
   timestamp: number;
   engineerId?: string;
-  uploadAttempts?: number;
-}
-
-export interface PermissionStatus {
-  location: 'prompt' | 'denied' | 'granted';
-  backgroundLocation: 'prompt' | 'denied' | 'granted';
-  foregroundService: 'prompt' | 'denied' | 'granted';
 }
 
 export interface WorkHourTrackingOptions {
+  /** Identifier sent with every upload. Required. */
   engineerId: string;
-  uploadInterval: number; // in minutes, default 5
+  /** Upload (and sampling) interval in milliseconds. Default 300000 (5 minutes). */
+  uploadInterval?: number;
+  /** Endpoint that receives `{engineerId, timestamp, locations: [...]}` POSTs. Required. */
   serverUrl: string;
+  /** Sent as a Bearer token in the Authorization header. */
   authToken?: string;
-  enableOfflineQueue?: boolean; // queue locations when offline
+  /** Keep fixes queued across failed uploads (default true). */
+  enableOfflineQueue?: boolean;
 }
 
+export interface WorkHourUploadResult {
+  success: boolean;
+  /** Number of fixes in the uploaded (or dropped) batch. */
+  count: number;
+  error?: string;
+}
+
+/**
+ * Background location tracking for Capacitor.
+ *
+ * ## Permission flow (Android)
+ *
+ * ```typescript
+ * const status = await BackgroundLocation.checkPermissions();
+ * if (status.location !== 'granted') {
+ *   const after = await BackgroundLocation.requestPermissions({ permissions: ['location'] });
+ *   if (after.location !== 'granted') {
+ *     // Denied — explain, then send the user to settings:
+ *     await BackgroundLocation.openLocationSettings();
+ *     return;
+ *   }
+ * }
+ * const start = await BackgroundLocation.startTracking({ reference: 'task_1' });
+ * if (!start.backgroundLocationGranted) {
+ *   // Tracking runs, but ask for "Allow all the time" so it survives backgrounding:
+ *   await BackgroundLocation.requestPermissions({ permissions: ['backgroundLocation'] });
+ * }
+ * ```
+ *
+ * Every rejection carries an {@link ErrorCode} in `error.code`; asynchronous
+ * failures arrive through the `error` event. Nothing in this plugin crashes the app
+ * on a permission problem.
+ */
 export interface BackgroundLocationPlugin {
 
-  // Permission methods
+  /**
+   * Current state of all location permission tiers, including the accuracy tier
+   * (Android 12+ users may grant approximate location only).
+   */
   checkPermissions(): Promise<PermissionStatus>;
-  requestPermissions(): Promise<PermissionStatus>;
+
+  /**
+   * Request location permissions. Foreground and background are requested in
+   * sequence as Android requires; see {@link RequestPermissionsOptions} for
+   * requesting a single tier (recommended UX).
+   *
+   * Once a tier reports `denied`, Android will not show the dialog again — use
+   * `openLocationSettings()` and let the user grant it manually.
+   */
+  requestPermissions(options?: RequestPermissionsOptions): Promise<PermissionStatus>;
+
+  /** Whether device location services (the GPS toggle) are enabled. */
   isLocationServiceEnabled(): Promise<{ enabled: boolean }>;
+
+  /**
+   * Open this app's system settings page — where the user grants a previously
+   * denied permission or upgrades to "Allow all the time".
+   */
   openLocationSettings(): Promise<void>;
 
-  startTracking({reference, highAccuracy, minDistance, interval }: {reference: string, highAccuracy: boolean, minDistance: number, interval: number}): Promise<void>;
+  /** Open the device location-services settings — for the GPS-off case. */
+  openDeviceLocationSettings(): Promise<void>;
 
+  /**
+   * Start recording a route under `reference`.
+   *
+   * Requires foreground location permission and enabled location services
+   * (rejects with `PERMISSION_DENIED` / `LOCATION_SERVICES_DISABLED` otherwise).
+   * Missing background permission does NOT reject: tracking starts and the result's
+   * `backgroundLocationGranted: false` (plus a non-fatal `error` event) tells you to
+   * ask the user for "Allow all the time".
+   *
+   * The session is persisted natively and survives app and device restarts until
+   * `stopTracking()` is called.
+   */
+  startTracking(options: StartTrackingOptions): Promise<StartTrackingResult>;
+
+  /** Stop the active tracking session. Idempotent — never rejects when inactive. */
   stopTracking(): Promise<void>;
 
-  getStoredLocations({reference}: {reference: string}): Promise<{ locations: LocationData[] }>;
+  /** Current native tracking state — useful to resync UI after an app restart. */
+  getTrackingStatus(): Promise<TrackingStatus>;
 
-  getCurrentLocation(): Promise<{
-    latitude: number;
-    longitude: number;
-    accuracy: number;
-    altitude?: number;
-    speed?: number;
-    heading?: number;
-    timestamp: number;
-  }>;
+  /**
+   * Get the device's current position.
+   *
+   * With `targetAccuracy` set, fixes stream as `currentLocation` events until one
+   * meets the target (see {@link CurrentLocationOptions}) — use this to show a
+   * live "improving accuracy" indicator while waiting for a precise fix.
+   */
+  getCurrentLocation(options?: CurrentLocationOptions): Promise<CurrentLocation>;
 
+  /**
+   * Cancel an in-flight progressive `getCurrentLocation()` request; its promise
+   * rejects with `CANCELLED`.
+   */
+  cancelCurrentLocationRequest(): Promise<void>;
+
+  /** All recorded fixes for a reference, oldest first. */
+  getStoredLocations(options: { reference: string }): Promise<{ locations: LocationData[] }>;
+
+  /** Delete all stored fixes. */
   clearStoredLocations(): Promise<void>;
 
-  addListener(eventName: 'locationUpdate', listenerFunc: (data: LocationData) => void): Promise<PluginListenerHandle>;
+  /**
+   * Latest stored fix for a reference. Also re-emits it as a `locationUpdate`
+   * event. Rejects with `NOT_FOUND` when nothing is stored yet.
+   */
+  getLastLocation(options: { reference: string }): Promise<LocationData>;
 
-  addListener(eventName: 'locationStatus', listenerFunc: (status: { enabled: boolean }) => void): Promise<PluginListenerHandle>;
-
-  addListener(eventName: 'workHourLocationUpdate', listenerFunc: (data: WorkHourLocationData) => void): Promise<PluginListenerHandle>;
-
-  addListener(eventName: 'workHourLocationUploaded', listenerFunc: (data: { success: boolean, location: WorkHourLocationData, error?: string }) => void): Promise<PluginListenerHandle>;
-
-  getLastLocation({reference}: {reference: string}): Promise<void>;
-
+  /**
+   * Start emitting `locationStatus` events when the user toggles device location
+   * services. Needs no permission — safe to call on app start.
+   */
   startLocationStatusTracking(): Promise<void>;
 
+  /** Stop emitting `locationStatus` events. */
   stopLocationStatusTracking(): Promise<void>;
 
-  // Work hour tracking methods
-  startWorkHourTracking(options: WorkHourTrackingOptions): Promise<void>;
-  
+  /**
+   * Start periodic location uploads to `serverUrl` (persists across app kills as a
+   * foreground service). Same permission model as `startTracking()`.
+   */
+  startWorkHourTracking(options: WorkHourTrackingOptions): Promise<StartTrackingResult>;
+
+  /** Stop work-hour tracking. Idempotent. */
   stopWorkHourTracking(): Promise<void>;
-  
+
   isWorkHourTrackingActive(): Promise<{ active: boolean }>;
-  
+
+  /** Fixes queued for upload, as visible to this app process. */
   getQueuedWorkHourLocations(): Promise<{ locations: WorkHourLocationData[] }>;
-  
+
   clearQueuedWorkHourLocations(): Promise<void>;
 
+  /** A fix was recorded for the active tracking session. */
+  addListener(eventName: 'locationUpdate',
+    listenerFunc: (data: LocationData) => void): Promise<PluginListenerHandle>;
+
+  /** Device location services were toggled on/off. */
+  addListener(eventName: 'locationStatus',
+    listenerFunc: (status: { enabled: boolean }) => void): Promise<PluginListenerHandle>;
+
+  /** Live fix stream from a progressive `getCurrentLocation()` request. */
+  addListener(eventName: 'currentLocation',
+    listenerFunc: (data: CurrentLocation) => void): Promise<PluginListenerHandle>;
+
+  /**
+   * Asynchronous failure or warning — see {@link PluginError}. Listen for
+   * `BACKGROUND_PERMISSION_DENIED` here to know when to ask the user for
+   * "Allow all the time".
+   */
+  addListener(eventName: 'error',
+    listenerFunc: (error: PluginError) => void): Promise<PluginListenerHandle>;
+
+  /** A fix entered the work-hour upload queue. */
+  addListener(eventName: 'workHourLocationUpdate',
+    listenerFunc: (data: WorkHourLocationData) => void): Promise<PluginListenerHandle>;
+
+  /** A work-hour upload batch succeeded or failed. */
+  addListener(eventName: 'workHourLocationUploaded',
+    listenerFunc: (data: WorkHourUploadResult) => void): Promise<PluginListenerHandle>;
+
+  /** Remove all listeners registered by this plugin. */
+  removeAllListeners(): Promise<void>;
 }
