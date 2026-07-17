@@ -65,24 +65,68 @@ If your app previously declared `com.elsapiens.backgroundlocation.LocationBroadc
 or `LocationStateReceiver` in its own manifest, remove those entries — the plugin
 registers them at runtime, and duplicate manifest registration causes duplicate events.
 
+### iOS Configuration
+
+Unlike Android, Apple gives plugins no way to merge permission strings or
+capabilities into the host app automatically — **these steps are required, done
+once, in your app's own Xcode project:**
+
+1. **Info.plist usage description keys** (Xcode target → Info tab → add these two
+   rows, or edit Info.plist directly). Missing either one crashes the app the
+   instant permission is requested — not a soft failure:
+
+   ```xml
+   <key>NSLocationWhenInUseUsageDescription</key>
+   <string>Your location is used to record your route while tracking is active.</string>
+   <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+   <string>Allowing location access all the time lets tracking continue and recover automatically after the app is closed.</string>
+   ```
+
+   The plugin checks for these before ever calling into CoreLocation's request
+   APIs and rejects `requestPermissions()` with a clear `INTERNAL_ERROR` message
+   naming the missing key, rather than letting the app crash — but the fix is
+   always to add the key, the plugin cannot supply one for you.
+
+2. **Background Modes capability** (Xcode target → Signing & Capabilities → **+
+   Capability** → *Background Modes* → check **Location updates**). This is what
+   allows a tracking session to survive the app being backgrounded; without it,
+   `startTracking()`/`startWorkHourTracking()` still work while the app is in the
+   foreground, but the plugin reports a non-fatal `SERVICE_START_FAILED` `error`
+   event explaining the missing capability instead of silently losing updates the
+   moment the user switches apps.
+
+Nothing else is required — no other Info.plist keys, no CocoaPods setup beyond the
+normal `pod install` from `npx cap sync`, and the plugin adds no dependency beyond
+Capacitor itself (route storage uses the system SQLite library).
+
+**iOS Settings deep-link note:** Apple only allows apps to deep-link to their own
+Settings page, not to the system-wide Location Services toggle — so both
+`openLocationSettings()` and `openDeviceLocationSettings()` open the same app
+Settings screen on iOS (the per-app Location permission and the "Allow all the
+time" upgrade both live there). This differs from Android, where the two methods
+open genuinely different screens; write UI copy that works either way.
+
 ## Quick Start
 
 ### Permission model (read this first)
 
-Android has **two independent location permission tiers** and they must be requested
-in order:
+Both platforms split location access into **two independent tiers**, and both
+must be requested in order — the plugin normalizes the platform differences
+(Android's dialog vs. iOS's settings-page upgrade) behind the same API:
 
-1. **Foreground ("While using the app")** — enough to start tracking. A location
-   foreground service started while the app is visible keeps receiving fixes after
-   the app is backgrounded.
-2. **Background ("Allow all the time")** — needed only so tracking can *recover*
-   when the system restarts it while the app is not visible (device reboot,
-   watchdog restart, app swiped away). Android grants it on a separate settings
-   screen, never in the first dialog.
+1. **Foreground** (Android: "While using the app" · iOS: "While Using the App") —
+   enough to start tracking. A tracking session started while the app is visible
+   keeps receiving fixes after the app is backgrounded, on both platforms.
+2. **Background** (Android: "Allow all the time" · iOS: "Always") — needed only so
+   tracking can *recover* when the OS restarts/relaunches it while the app is not
+   visible (device reboot, watchdog restart on Android; a significant-location-change
+   wake or the user reopening the app on iOS). Neither platform grants this tier from
+   the first dialog — Android requires a second `requestPermissions()` call, and iOS
+   requires foreground permission to already be granted before it will prompt at all.
 
-The plugin **never crashes the app** over permissions: calls reject with a typed
-`error.code`, and asynchronous problems (permission revoked mid-session, GPS
-switched off) arrive on the `error` event.
+The plugin **never crashes the app** over permissions on either platform: calls
+reject with a typed `error.code`, and asynchronous problems (permission revoked
+mid-session, GPS/Location Services switched off) arrive on the `error` event.
 
 ### Basic Task Tracking
 
@@ -600,14 +644,36 @@ async function testOfflineQueue() {
 | Platform | Support Status | Notes |
 |----------|---------------|-------|
 | **Android** | ✅ Full Support | All features available |
-| **iOS** | ⏳ Planned | Not currently implemented |
-| **Web** | 🔧 Development Only | Stub implementation for testing |
+| **iOS** | ✅ Full Support | All features available; requires two one-time Xcode configuration steps — see [iOS Configuration](#ios-configuration) |
+| **Web** | 🔧 Development Only | Real W3C Geolocation API for task tracking and current location; work-hour tracking (a native-only, server-upload feature) is unavailable |
+
+### Feature Parity
+
+| Feature | Android | iOS | Notes |
+|---------|:-------:|:---:|-------|
+| Task tracking (route recording) | ✅ | ✅ | Distance and accuracy filtering computed identically on both platforms |
+| Work hour tracking (periodic upload) | ✅ | ✅ | iOS samples via a time gate (see below) since CoreLocation has no request-interval API |
+| Background recovery after restart | ✅ | ✅ | Android: sticky service + watchdog alarm. iOS: significant-location-change wake + foreground re-entry resync |
+| Progressive-accuracy current location | ✅ | ✅ | Identical `targetAccuracy`/`timeout` semantics |
+| Typed error codes + `error` event | ✅ | ✅ | Same `ErrorCode` values on both platforms |
+| Approximate/coarse accuracy reporting | ✅ | ✅ | Android: user's Fine/Coarse choice. iOS: `CLAccuracyAuthorization` (Precise Location toggle) |
+
+**One real platform difference:** CoreLocation has no equivalent of Android's
+`LocationRequest` update interval — only a distance filter. The iOS plugin honors
+`interval`/`uploadInterval` as an explicit time gate on top of CoreLocation's
+distance-filtered delivery, so recorded/queued cadence stays comparable across
+platforms for the same options, but the underlying delivery mechanism differs.
 
 ### Android Requirements
 - **Minimum SDK**: API 31 (Android 12)
 - **Target SDK**: API 34+ recommended
 - **Google Play Services**: Location services required
 - **Permissions**: Declared by the plugin's manifest; granted by the user at runtime
+
+### iOS Requirements
+- **Minimum deployment target**: iOS 14
+- **Xcode configuration**: two one-time steps — see [iOS Configuration](#ios-configuration) above
+- **Dependencies**: Capacitor only; route storage uses the system SQLite library (no CocoaPods beyond Capacitor)
 
 ### Android Version Compatibility
 
@@ -638,7 +704,11 @@ moment.
 
 ## Architecture Overview
 
-The plugin is built with a modular architecture for maintainability and extensibility:
+Both native platforms follow the same modular design — small, single-responsibility,
+independently testable collaborators behind one bridge-facing plugin class — so the
+same mental model applies whichever platform's code you're reading.
+
+**Android:**
 
 ```
 BackgroundLocationPlugin (Main API — bridge translation only)
@@ -651,13 +721,39 @@ BackgroundLocationPlugin (Main API — bridge translation only)
 └── WorkHourLocationUploader + WorkHourLocationQueue (Batch uploads)
 ```
 
-### Key Components
+Tracking itself runs in two foreground services (`BackgroundLocationService`,
+`WorkHourLocationService`) that the plugin starts/stops — this is what keeps
+tracking alive while the app is backgrounded, and is where the crash-safety
+guards (start-foreground-first, permission re-checks) live.
 
-- **LocationPermissionManager**: Handles all Android location permission requests and validation
-- **LocationDataManager**: Processes location data, performs validation, and manages SQLite storage
-- **LocationTrackingManager**: Coordinates different tracking modes and manages their lifecycle
-- **LocationCoordinator**: Singleton that manages FusedLocationProviderClient to prevent conflicts
-- **WorkHourLocationUploader**: Handles background uploads to server with offline queue support
+**iOS:**
+
+```
+BackgroundLocationPlugin (Main API — bridge translation only)
+├── BackgroundLocation (Orchestrator — owns everything below)
+├── LocationPermissionManager (CLLocationManager authorization, Info.plist guards)
+├── TrackingStateStore (Session persistence across suspend/relaunch)
+├── LocationFilter / DistanceTracker (Fix validation, distance math — identical rules to Android)
+├── TaskLocationTracker (Route recording; own CLLocationManager)
+├── WorkHourLocationTracker + WorkHourLocationUploader/Queue (Periodic sampling + batch upload)
+├── CurrentLocationRequester (Progressive-accuracy current location, built on CurrentLocationWatcher)
+└── LocationDatabase (SQLite-backed fix storage, mirrors Android's schema)
+```
+
+iOS has no separate service process, so one orchestrator plus a handful of
+independent `CLLocationManager` instances (permissions, task tracking, work-hour
+sampling, current-location requests) fill that role — background survival comes
+from the `location` UIBackgroundModes capability plus a significant-location-change
+wake as a relaunch safety net, guarded against the two iOS-specific crash cases
+documented in [iOS Configuration](#ios-configuration).
+
+### Key Components (both platforms)
+
+- **LocationPermissionManager**: All permission checks/requests and the accuracy tier; on iOS also guards the two crash-prone CoreLocation APIs (see iOS Configuration)
+- **TrackingStateStore**: Persists session parameters so a system-initiated restart/relaunch resumes the *same* session instead of a corrupted default
+- **LocationFilter / DistanceTracker**: Shared, framework-free validation and distance-accumulation rules — a route recorded on either platform is held to the same standard
+- **CurrentLocationWatcher / CurrentLocationRequester**: Progressive-accuracy current-location state machine (Android: watcher only; iOS: watcher + its CoreLocation driver)
+- **WorkHourLocationUploader + WorkHourLocationQueue**: Bounded offline-safe upload queue and batch POST to the configured server
 
 ## Configuration
 

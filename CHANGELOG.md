@@ -5,6 +5,56 @@ All notable changes to the Elsapiens Background Location Plugin are documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-17
+
+### Added
+- **Full iOS implementation** — the platform moves from "planned/not implemented"
+  to full feature parity with Android: task tracking with route recording and
+  distance calculation, work-hour tracking with batched server uploads and an
+  offline queue, progressive-accuracy `getCurrentLocation`, the same typed
+  `ErrorCode`/`error` event contract, and session persistence that survives the
+  app being suspended and relaunched by the system.
+- iOS route/fix storage via a direct `libsqlite3` binding (no third-party
+  dependency, matching Android's own zero-extra-dependency storage), with the
+  same schema and distance math (`DistanceTracker`, ported 1:1 including the
+  haversine formula) so a route recorded on either platform is held to the same
+  standard.
+- 32 XCTest unit tests covering the ported pure-logic classes (`LocationFilter`,
+  `DistanceTracker`, `CurrentLocationWatcher`, `WorkHourLocationQueue`,
+  `TrackingStateStore`), run against an iOS Simulator destination; full
+  `xcodebuild` compile verified for `generic/platform=iOS`.
+- README iOS Configuration section documenting the two required one-time Xcode
+  steps (Info.plist usage-description keys, Background Modes → Location
+  updates capability) and the platform's Settings deep-link limitation; new
+  Feature Parity table and iOS Requirements section.
+
+### Fixed (iOS crash parity)
+Two iOS crashes in the same class as the Android `ForegroundServiceDidNotStartInTimeException`
+this plugin was originally rewritten to fix — both are guarded against before
+they can occur, never worked around after the fact:
+- Setting `allowsBackgroundLocationUpdates = true` without the host app's
+  Info.plist declaring the `location` UIBackgroundModes capability throws an
+  uncaught `NSInvalidArgumentException` and kills the app. The iOS trackers
+  check `hostAppDeclaresBackgroundLocationMode` first and report a non-fatal
+  `SERVICE_START_FAILED` error instead.
+- Calling `requestWhenInUseAuthorization()`/`requestAlwaysAuthorization()`
+  without the matching `NSLocation*UsageDescription` Info.plist key crashes
+  immediately ("attempted to access privacy-sensitive data without a usage
+  description"). `requestPermissions()` checks for the key first and rejects
+  with a clear configuration error naming the missing key instead of ever
+  calling the crash-prone API.
+
+### Changed
+- `interval` (task tracking) and `uploadInterval` (work-hour tracking) are
+  honored on iOS as an explicit time gate layered on top of CoreLocation's
+  distance-filtered delivery — CoreLocation has no request-interval API the way
+  Android's FusedLocationProvider does, so this keeps recorded/queued cadence
+  comparable across platforms for the same options rather than silently
+  dropping the parameter on iOS.
+- `openLocationSettings()` and `openDeviceLocationSettings()` both open the
+  app's Settings page on iOS (Apple permits no deep link to the system-wide
+  Location Services screen); documented as a platform difference, not a bug.
+
 ## [0.1.1] - 2026-07-17
 
 ### Changed
