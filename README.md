@@ -604,35 +604,51 @@ async function testOfflineQueue() {
 | **Web** | 🔧 Development Only | Stub implementation for testing |
 
 ### Android Requirements
-- **Minimum SDK**: API 23 (Android 6.0)
+- **Minimum SDK**: API 31 (Android 12)
 - **Target SDK**: API 34+ recommended
 - **Google Play Services**: Location services required
-- **Permissions**: Multiple location permissions required
+- **Permissions**: Declared by the plugin's manifest; granted by the user at runtime
 
 ### Android Version Compatibility
 
-| Android Version | API Level | Background Location | Foreground Service | Notes |
-|----------------|-----------|-------------------|-------------------|-------|
-| 6.0 - 7.1 | 23-25 | ✅ Available | ✅ Available | Runtime permissions required |
-| 8.0 - 8.1 | 26-27 | ✅ Available | ✅ Available | Background service limitations |
-| 9.0 | 28 | ✅ Available | ✅ Available | Additional battery optimizations |
-| 10.0+ | 29+ | ⚠️ Restricted | ✅ Available | Background location requires user approval |
-| 11.0+ | 30+ | ⚠️ Restricted | ✅ Available | One-time permissions, scoped storage |
-| 12.0+ | 31+ | ⚠️ Restricted | ✅ Available | Approximate location option |
-| 13.0+ | 33+ | ⚠️ Restricted | ✅ Available | Runtime notification permissions |
-| 14.0+ | 34+ | ⚠️ Restricted | ✅ Available | Enhanced privacy features |
+Location tracking works on **every supported Android version**. The differences
+between OS releases are in *how the user grants access* — the plugin absorbs those
+differences and guides the user through the right screen, so from the app's point
+of view the API and behaviour are identical everywhere.
+
+| Android Version | API Level | Tracking while app in use | Tracking after app closed | How the plugin handles this version |
+|----------------|-----------|---------------------------|---------------------------|-------------------------------------|
+| 12 | 31-32 | ✅ Works with one dialog tap | ✅ Works after one settings tap | "Allow all the time" is granted on a settings screen the plugin opens for the user. If only "Approximate" accuracy is chosen, tracking still runs and the app is told (`accuracy: 'coarse'`) so it can ask for precise accuracy. |
+| 13 | 33 | ✅ Works with one dialog tap | ✅ Works after one settings tap | Same as above. The tracking notification additionally needs the app to request notification permission — tracking runs either way; the notification is just hidden without it. |
+| 14+ | 34+ | ✅ Works with one dialog tap | ✅ Works after one settings tap | Same as above. The typed foreground-service permission Android 14 requires is declared by the plugin's manifest automatically — nothing for the app to do. |
+
+**The one-time user steps, in plain terms:**
+
+1. *"While using the app"* — a single tap in the standard system dialog. This alone
+   is enough for full tracking during and after app use, as long as the tracking
+   session was started while the app was open.
+2. *"Allow all the time"* — one extra tap on the settings screen the plugin opens
+   (`requestPermissions({permissions: ['backgroundLocation']})`). This only adds
+   automatic recovery when the system restarts tracking while the app is closed
+   (device reboot, memory pressure, app swiped away).
+
+If the user skips step 2, nothing breaks: tracking runs, and the app receives a
+non-fatal `BACKGROUND_PERMISSION_DENIED` event it can use to ask again at a better
+moment.
 
 ## Architecture Overview
 
 The plugin is built with a modular architecture for maintainability and extensibility:
 
 ```
-BackgroundLocationPlugin (Main API)
-├── LocationPermissionManager (Permission Handling)
-├── LocationDataManager (Data Processing)
-├── LocationTrackingManager (Tracking Coordination)
-├── LocationCoordinator (Service Management)
-└── WorkHourLocationUploader (Server Communication)
+BackgroundLocationPlugin (Main API — bridge translation only)
+├── LocationPermissionManager (Permission checks, accuracy tier)
+├── LocationTrackingManager (Service lifecycle, validation)
+├── TrackingStateStore (Session persistence across restarts)
+├── LocationFilter / DistanceTracker (Fix validation, distance math)
+├── CurrentLocationWatcher (Progressive-accuracy current location)
+├── LocationDataManager (Bridge conversion of stored fixes)
+└── WorkHourLocationUploader + WorkHourLocationQueue (Batch uploads)
 ```
 
 ### Key Components
