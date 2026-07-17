@@ -7,7 +7,7 @@ This guide provides step-by-step instructions for integrating the Elsapiens Back
 - Capacitor 4.0+ application
 - Android Studio (for Android development)
 - Node.js 16+ and npm/yarn
-- Android SDK with API 23+ support
+- Android SDK with API 31+ support (plugin minSdk is 31)
 
 ## Installation Steps
 
@@ -629,7 +629,7 @@ npx cap open android
 
 **Solutions**:
 1. Check AndroidManifest.xml has all required permissions
-2. Ensure target SDK version supports runtime permissions (API 23+)
+2. Ensure the app's minSdk is 31+ (the plugin declares all required permissions via manifest merge)
 3. Test on physical device (permissions may behave differently on emulator)
 
 ### Issue 3: Location Updates Not Received
