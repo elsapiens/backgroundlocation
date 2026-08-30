@@ -43,6 +43,12 @@ public class BackgroundLocationPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "isWorkHourTrackingActive", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getQueuedWorkHourLocations", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearQueuedWorkHourLocations", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "addGeofence", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "removeGeofence", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "removeAllGeofences", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "listGeofences", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getPendingGeofenceTransitions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearPendingGeofenceTransitions", returnType: CAPPluginReturnPromise),
     ]
 
     private let location = BackgroundLocation()
@@ -50,6 +56,9 @@ public class BackgroundLocationPlugin: CAPPlugin, CAPBridgedPlugin {
 
     public override func load() {
         location.eventSink = self
+        location.geofences.hasLiveListener = { [weak self] in
+            self?.hasListeners("geofenceTransition") ?? false
+        }
         location.resumeSessionsIfNeeded()
         #if canImport(UIKit)
         NotificationCenter.default.addObserver(
@@ -399,6 +408,108 @@ public class BackgroundLocationPlugin: CAPPlugin, CAPBridgedPlugin {
             "engineerId": data.engineerId,
         ]
     }
+
+    // MARK: Geofencing
+
+    @objc func addGeofence(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), !id.isEmpty,
+              let latitude = call.getDouble("latitude"),
+              let longitude = call.getDouble("longitude"),
+              let radius = call.getDouble("radius")
+        else {
+            call.reject("id, latitude, longitude and radius are required",
+                        ErrorCode.missingParameter.rawValue)
+            return
+        }
+
+        var notification: GeofenceNotificationSpec?
+        if let spec = call.getObject("notification"),
+           let title = spec["title"] as? String,
+           let body = spec["body"] as? String {
+            notification = GeofenceNotificationSpec(title: title, body: body)
+        }
+
+        let definition = GeofenceDefinition(
+            id: id,
+            latitude: latitude,
+            longitude: longitude,
+            radius: radius,
+            notifyOnEntry: call.getBool("notifyOnEntry") ?? true,
+            notifyOnExit: call.getBool("notifyOnExit") ?? false,
+            notification: notification
+        )
+
+        do {
+            try location.geofences.add(definition)
+            call.resolve()
+        } catch GeofenceError.backgroundPermissionDenied {
+            call.reject("\"Allow all the time\" location permission is required to monitor a region",
+                        ErrorCode.backgroundPermissionDenied.rawValue)
+        } catch GeofenceError.tooManyRegions {
+            call.reject("at most \(GeofenceMonitor.maxRegions) regions can be monitored",
+                        ErrorCode.internalError.rawValue)
+        } catch {
+            call.reject("region monitoring is not available on this device",
+                        ErrorCode.internalError.rawValue)
+        }
+    }
+
+    @objc func removeGeofence(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), !id.isEmpty else {
+            call.reject("id is required", ErrorCode.missingParameter.rawValue)
+            return
+        }
+        location.geofences.remove(id: id)
+        call.resolve()
+    }
+
+    @objc func removeAllGeofences(_ call: CAPPluginCall) {
+        location.geofences.removeAll()
+        call.resolve()
+    }
+
+    @objc func listGeofences(_ call: CAPPluginCall) {
+        call.resolve(["geofences": location.geofences.list().map(geofenceDict)])
+    }
+
+    @objc func getPendingGeofenceTransitions(_ call: CAPPluginCall) {
+        let transitions = location.geofences.pendingTransitions()
+            .map { geofenceTransitionDict($0, buffered: true) }
+        call.resolve(["transitions": transitions])
+    }
+
+    @objc func clearPendingGeofenceTransitions(_ call: CAPPluginCall) {
+        location.geofences.clearPendingTransitions()
+        call.resolve()
+    }
+
+    private func geofenceDict(_ definition: GeofenceDefinition) -> [String: Any] {
+        var dict: [String: Any] = [
+            "id": definition.id,
+            "latitude": definition.latitude,
+            "longitude": definition.longitude,
+            "radius": definition.radius,
+            "notifyOnEntry": definition.notifyOnEntry,
+            "notifyOnExit": definition.notifyOnExit,
+        ]
+        if let notification = definition.notification {
+            dict["notification"] = ["title": notification.title, "body": notification.body]
+        }
+        return dict
+    }
+
+    private func geofenceTransitionDict(_ transition: GeofenceTransition, buffered: Bool) -> [String: Any] {
+        var dict: [String: Any] = [
+            "id": transition.id,
+            "transition": transition.transition,
+            "timestamp": transition.timestamp,
+            "buffered": buffered,
+        ]
+        if let latitude = transition.latitude { dict["latitude"] = latitude }
+        if let longitude = transition.longitude { dict["longitude"] = longitude }
+        if let accuracy = transition.accuracy { dict["accuracy"] = accuracy }
+        return dict
+    }
 }
 
 // MARK: - BackgroundLocationEventSink
@@ -420,6 +531,10 @@ extension BackgroundLocationPlugin: BackgroundLocationEventSink {
         var data: [String: Any] = ["success": success, "count": count]
         if let error { data["error"] = error }
         notifyListeners("workHourLocationUploaded", data: data)
+    }
+
+    func didCrossGeofence(_ transition: GeofenceTransition, buffered: Bool) {
+        notifyListeners("geofenceTransition", data: geofenceTransitionDict(transition, buffered: buffered))
     }
 
     func didEmitError(code: ErrorCode, message: String, source: ErrorSource, fatal: Bool) {

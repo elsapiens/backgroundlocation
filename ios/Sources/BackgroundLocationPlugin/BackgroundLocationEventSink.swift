@@ -19,6 +19,11 @@ protocol BackgroundLocationEventSink: AnyObject {
     /// A work-hour upload batch finished (successfully or not).
     func didFinishWorkHourUpload(count: Int, success: Bool, error: String?)
 
+    /// The device crossed a monitored region boundary. `buffered` is false for a
+    /// live crossing and true for one read back from the native buffer, which is
+    /// the normal case — crossings usually happen with no JavaScript running.
+    func didCrossGeofence(_ transition: GeofenceTransition, buffered: Bool)
+
     /// An asynchronous failure or warning — see `ErrorCode`/`ErrorSource`.
     func didEmitError(code: ErrorCode, message: String, source: ErrorSource, fatal: Bool)
 }

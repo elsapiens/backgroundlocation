@@ -1,6 +1,81 @@
 import type { PluginListenerHandle } from "@capacitor/core";
 
 /**
+ * A circular region the operating system watches on the app's behalf.
+ *
+ * Region monitoring is not the tracking API with a distance check bolted on: the
+ * OS does the watching, wakes a *terminated* app to deliver the crossing, and
+ * costs effectively no battery because it rides on hardware the device is
+ * already using. That is why this exists separately from `startTracking` —
+ * polling cannot see someone whose phone is in their pocket with the app closed,
+ * which is the only situation this feature is for.
+ *
+ * Platform limits worth knowing before you design around it:
+ * - iOS monitors at most 20 regions per app, and clamps a radius larger than the
+ *   device's maximum (typically ~1-2 km). Android allows 100.
+ * - Both platforms need "Allow all the time" location permission. With only
+ *   "While Using", regions are registered but never fire once the app is
+ *   backgrounded.
+ * - Delivery is best-effort and can lag by a minute or more; the OS trades
+ *   promptness for power. Treat a crossing as "they have arrived", never as a
+ *   precise timestamp.
+ */
+export interface Geofence {
+  /** Caller-chosen identity. Re-adding the same id replaces the region. */
+  id: string;
+  latitude: number;
+  longitude: number;
+  /** Radius in metres. Values under ~100 m are unreliable in practice. */
+  radius: number;
+  /** Fire when the device enters the region. Defaults to true. */
+  notifyOnEntry?: boolean;
+  /** Fire when the device leaves the region. Defaults to false. */
+  notifyOnExit?: boolean;
+  /**
+   * Post a local notification natively the moment the region fires.
+   *
+   * Strongly recommended. A crossing can relaunch a terminated app, but the
+   * webview takes seconds to boot and may be killed again before it does — so a
+   * reminder that only exists as a JavaScript event is a reminder the user may
+   * never see. Posting it from native code makes it independent of whether JS
+   * ever runs.
+   */
+  notification?: GeofenceNotification;
+}
+
+/** Local notification posted natively when a region fires. */
+export interface GeofenceNotification {
+  title: string;
+  body: string;
+  /**
+   * Android notification channel id. Defaults to the plugin's own channel.
+   * Pass the host app's channel to keep the user's notification settings in
+   * one place.
+   */
+  channelId?: string;
+}
+
+export type GeofenceTransitionType = 'enter' | 'exit';
+
+/** Payload of the `geofenceTransition` event. */
+export interface GeofenceTransitionEvent {
+  /** The `id` given to `addGeofence`. */
+  id: string;
+  transition: GeofenceTransitionType;
+  latitude?: number;
+  longitude?: number;
+  accuracy?: number;
+  /** Epoch milliseconds when the OS reported the crossing. */
+  timestamp: number;
+  /**
+   * True when this crossing was recorded while no JavaScript listener existed
+   * — the app was terminated or suspended — and is being read back from the
+   * native buffer rather than delivered live.
+   */
+  buffered: boolean;
+}
+
+/**
  * Permission state for a single permission tier.
  *
  * - `granted` — the user granted the permission.
@@ -335,6 +410,40 @@ export interface BackgroundLocationPlugin {
 
   clearQueuedWorkHourLocations(): Promise<void>;
 
+  /**
+   * Start monitoring a circular region. Replaces any region with the same id.
+   *
+   * Rejects with `BACKGROUND_PERMISSION_DENIED` when "Allow all the time" has
+   * not been granted — registering the region anyway would produce a watch that
+   * silently never fires, which is worse than a clear failure.
+   */
+  addGeofence(options: Geofence): Promise<void>;
+
+  /** Stop monitoring one region. Succeeds whether or not it was registered. */
+  removeGeofence(options: { id: string }): Promise<void>;
+
+  /** Stop monitoring every region this plugin registered. */
+  removeAllGeofences(): Promise<void>;
+
+  /** The regions currently being monitored. */
+  listGeofences(): Promise<{ geofences: Geofence[] }>;
+
+  /**
+   * Crossings that fired while no JavaScript listener was attached, oldest
+   * first. Does not consume them — call `clearPendingGeofenceTransitions()`
+   * once they are handled.
+   *
+   * Call this at startup, every time, right after attaching the listener. A
+   * region crossing usually happens with the app dead, so the buffer — not the
+   * event — is the normal delivery path; treating it as an edge case means
+   * missing most crossings. Nothing is buffered while a listener is attached,
+   * so this cannot double-deliver a live event.
+   */
+  getPendingGeofenceTransitions(): Promise<{ transitions: GeofenceTransitionEvent[] }>;
+
+  /** Discard buffered crossings. Call after handling them. */
+  clearPendingGeofenceTransitions(): Promise<void>;
+
   /** A fix was recorded for the active tracking session. */
   addListener(eventName: 'locationUpdate',
     listenerFunc: (data: LocationData) => void): Promise<PluginListenerHandle>;
@@ -362,6 +471,17 @@ export interface BackgroundLocationPlugin {
   /** A work-hour upload batch succeeded or failed. */
   addListener(eventName: 'workHourLocationUploaded',
     listenerFunc: (data: WorkHourUploadResult) => void): Promise<PluginListenerHandle>;
+
+  /**
+   * The device entered or left a monitored region, delivered live.
+   *
+   * A crossing that fires while the app is dead cannot reach a listener that
+   * does not exist yet; it is buffered instead. Attach this listener AND drain
+   * `getPendingGeofenceTransitions()` at startup, or you will only ever see the
+   * crossings that happen to occur while the app is open.
+   */
+  addListener(eventName: 'geofenceTransition',
+    listenerFunc: (event: GeofenceTransitionEvent) => void): Promise<PluginListenerHandle>;
 
   /** Remove all listeners registered by this plugin. */
   removeAllListeners(): Promise<void>;

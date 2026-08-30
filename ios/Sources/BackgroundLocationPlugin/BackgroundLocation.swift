@@ -16,11 +16,13 @@ final class BackgroundLocation {
     let taskTracker: TaskLocationTracker
     let workHourTracker: WorkHourLocationTracker
     let currentLocationRequester: CurrentLocationRequester
+    let geofences: GeofenceMonitor
 
     weak var eventSink: BackgroundLocationEventSink? {
         didSet {
             taskTracker.eventSink = eventSink
             workHourTracker.eventSink = eventSink
+            geofences.eventSink = eventSink
         }
     }
 
@@ -28,6 +30,7 @@ final class BackgroundLocation {
         taskTracker = TaskLocationTracker(permissions: permissions, stateStore: stateStore, database: database)
         workHourTracker = WorkHourLocationTracker(permissions: permissions, stateStore: stateStore)
         currentLocationRequester = CurrentLocationRequester(permissions: permissions)
+        geofences = GeofenceMonitor(permissions: permissions, store: UserDefaultsKeyValueStore())
     }
 
     /// Restore any session that was active when the app was last suspended or

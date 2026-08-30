@@ -47,4 +47,5 @@ enum ErrorSource: String {
     case workHourTracking = "workHourTracking"
     case currentLocation = "currentLocation"
     case permissions = "permissions"
+    case geofencing = "geofencing"
 }

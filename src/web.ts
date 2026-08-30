@@ -4,6 +4,8 @@ import type {
   BackgroundLocationPlugin,
   CurrentLocation,
   CurrentLocationOptions,
+  Geofence,
+  GeofenceTransitionEvent,
   LocationData,
   PermissionStatus,
   RequestPermissionsOptions,
@@ -242,6 +244,35 @@ export class BackgroundLocationWeb extends WebPlugin implements BackgroundLocati
 
   async clearQueuedWorkHourLocations(): Promise<void> {
     // Nothing queued on web.
+  }
+
+  // Region monitoring has no web equivalent. The browser can watch a position,
+  // but only while the page is open — which is the one thing this API exists to
+  // avoid depending on, so a polling emulation here would be a worse lie than a
+  // clear refusal.
+  async addGeofence(options: Geofence): Promise<void> {
+    console.warn('BackgroundLocation: geofencing is not available on web', options);
+    throw this.unavailable('Region monitoring requires a native platform.');
+  }
+
+  async removeGeofence(): Promise<void> {
+    // Nothing registered on web.
+  }
+
+  async removeAllGeofences(): Promise<void> {
+    // Nothing registered on web.
+  }
+
+  async listGeofences(): Promise<{ geofences: Geofence[] }> {
+    return { geofences: [] };
+  }
+
+  async getPendingGeofenceTransitions(): Promise<{ transitions: GeofenceTransitionEvent[] }> {
+    return { transitions: [] };
+  }
+
+  async clearPendingGeofenceTransitions(): Promise<void> {
+    // Nothing buffered on web.
   }
 
   private stopWatch(): void {

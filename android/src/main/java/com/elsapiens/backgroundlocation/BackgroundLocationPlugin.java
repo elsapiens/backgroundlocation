@@ -30,6 +30,9 @@ import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.location.Priority;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -72,6 +75,7 @@ public class BackgroundLocationPlugin extends Plugin {
     private LocationTrackingManager trackingManager;
     private LocationDataManager dataManager;
     private TrackingStateStore stateStore;
+    private GeofenceManager geofenceManager;
     private SQLiteDatabaseHelper database;
 
     private LocationBroadcastReceiver locationReceiver;
@@ -109,6 +113,7 @@ public class BackgroundLocationPlugin extends Plugin {
             dataManager = new LocationDataManager(database);
             stateStore = new TrackingStateStore(new SharedPrefsKeyValueStore(context));
             trackingManager = new LocationTrackingManager(context, permissionManager, stateStore);
+            geofenceManager = new GeofenceManager(context, new SharedPrefsKeyValueStore(context));
             registerLocationReceiver(context);
             Log.d(TAG, "BackgroundLocationPlugin initialized");
         } catch (Exception e) {
@@ -814,6 +819,117 @@ public class BackgroundLocationPlugin extends Plugin {
             data.put("error", error);
         }
         notifyListeners("workHourLocationUploaded", data);
+    }
+
+
+    // =================================================================================
+    // GEOFENCING
+    // =================================================================================
+
+    @PluginMethod
+    public void addGeofence(PluginCall call) {
+        String id = call.getString("id");
+        Double latitude = call.getDouble("latitude");
+        Double longitude = call.getDouble("longitude");
+        Double radius = call.getDouble("radius");
+        if (id == null || id.isEmpty() || latitude == null || longitude == null || radius == null) {
+            call.reject("id, latitude, longitude and radius are required", ErrorCodes.MISSING_PARAMETER);
+            return;
+        }
+        if (!permissionManager.hasBackgroundLocationPermission()) {
+            // Registering anyway would produce a watch that never fires once the
+            // app is backgrounded — a silent no-op is worse than a refusal the
+            // caller can act on.
+            call.reject("\"Allow all the time\" location permission is required to monitor a region",
+                    ErrorCodes.BACKGROUND_PERMISSION_DENIED);
+            return;
+        }
+
+        try {
+            JSONObject definition = new JSONObject();
+            definition.put("id", id);
+            definition.put("latitude", latitude);
+            definition.put("longitude", longitude);
+            definition.put("radius", radius);
+            definition.put("notifyOnEntry", call.getBoolean("notifyOnEntry", true));
+            definition.put("notifyOnExit", call.getBoolean("notifyOnExit", false));
+            JSObject notification = call.getObject("notification");
+            if (notification != null && notification.getString("title") != null
+                    && notification.getString("body") != null) {
+                definition.put("notification", new JSONObject(notification.toString()));
+            }
+            geofenceManager.add(definition);
+            call.resolve();
+        } catch (IllegalStateException e) {
+            call.reject(e.getMessage(), ErrorCodes.INTERNAL_ERROR);
+        } catch (Exception e) {
+            Log.e(TAG, "addGeofence failed", e);
+            call.reject("could not register the region: " + e.getMessage(), ErrorCodes.INTERNAL_ERROR);
+        }
+    }
+
+    @PluginMethod
+    public void removeGeofence(PluginCall call) {
+        String id = call.getString("id");
+        if (id == null || id.isEmpty()) {
+            call.reject("id is required", ErrorCodes.MISSING_PARAMETER);
+            return;
+        }
+        geofenceManager.remove(id);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void removeAllGeofences(PluginCall call) {
+        geofenceManager.removeAll();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void listGeofences(PluginCall call) {
+        JSObject result = new JSObject();
+        JSONArray geofences = new JSONArray();
+        for (JSONObject definition : geofenceManager.definitions()) {
+            geofences.put(definition);
+        }
+        result.put("geofences", geofences);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void getPendingGeofenceTransitions(PluginCall call) {
+        JSObject result = new JSObject();
+        JSONArray transitions = new JSONArray();
+        for (JSONObject transition : geofenceManager.pendingTransitions()) {
+            try {
+                transition.put("buffered", true);
+            } catch (JSONException ignored) {
+                // A payload we wrote ourselves; nothing useful to do but ship it.
+            }
+            transitions.put(transition);
+        }
+        result.put("transitions", transitions);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void clearPendingGeofenceTransitions(PluginCall call) {
+        geofenceManager.clearPendingTransitions();
+        call.resolve();
+    }
+
+    /** Whether JavaScript is listening right now — see GeofenceBroadcastReceiver. */
+    public boolean hasGeofenceListener() {
+        return hasListeners("geofenceTransition");
+    }
+
+    public void pushGeofenceTransitionToCapacitor(JSONObject transition, boolean buffered) {
+        try {
+            transition.put("buffered", buffered);
+        } catch (JSONException ignored) {
+            // As above.
+        }
+        notifyListeners("geofenceTransition", JSObject.fromJSONObject(transition));
     }
 
     // =================================================================================
