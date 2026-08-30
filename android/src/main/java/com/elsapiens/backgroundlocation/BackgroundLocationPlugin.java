@@ -926,10 +926,14 @@ public class BackgroundLocationPlugin extends Plugin {
     public void pushGeofenceTransitionToCapacitor(JSONObject transition, boolean buffered) {
         try {
             transition.put("buffered", buffered);
-        } catch (JSONException ignored) {
-            // As above.
+            notifyListeners("geofenceTransition", JSObject.fromJSONObject(transition));
+        } catch (JSONException e) {
+            // The payload is one we built ourselves a moment ago, so this
+            // cannot happen in practice — but dropping the event is the only
+            // safe response to a payload we cannot read, and re-buffering is
+            // not a fallback: the crossing already posted its notification.
+            Log.e(TAG, "could not deliver geofence transition", e);
         }
-        notifyListeners("geofenceTransition", JSObject.fromJSONObject(transition));
     }
 
     // =================================================================================

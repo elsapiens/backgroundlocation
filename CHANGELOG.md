@@ -5,6 +5,54 @@ All notable changes to the Elsapiens Background Location Plugin are documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-31
+
+### Added
+- **Geofencing / region monitoring** on both platforms — `addGeofence`,
+  `removeGeofence`, `removeAllGeofences`, `listGeofences`, the
+  `geofenceTransition` event, and `getPendingGeofenceTransitions` /
+  `clearPendingGeofenceTransitions` for crossings that arrived with nothing
+  listening. Built on `CLCircularRegion` (iOS) and `GeofencingClient`
+  (Android).
+
+  This is not the tracking API with a distance check on top, and the difference
+  matters: the OS holds the watch, wakes a *terminated* app to deliver the
+  crossing, and costs effectively no battery. Sampling cannot see a phone in a
+  pocket with the app closed, which is the only situation the feature exists
+  for.
+
+- Optional `notification` on a geofence, posted natively at the instant of the
+  crossing. A crossing can relaunch a terminated app, but the webview takes
+  seconds to boot and may be suspended again first — so a reminder that exists
+  only as a JavaScript event is one the user may never see.
+
+- Crossing buffer. When no JavaScript listener is attached — the normal case —
+  the crossing is persisted and read back with `getPendingGeofenceTransitions`.
+  Bounded at 50, oldest dropped first, so a buffer behind an app that never
+  launches cannot grow without limit.
+
+### Notes
+- Region monitoring requires "Allow all the time" location permission on both
+  platforms. `addGeofence` **rejects** with `BACKGROUND_PERMISSION_DENIED`
+  rather than registering a region that would be created and then silently
+  never fire.
+- Arming a region around a device already inside it would never produce a
+  crossing, so both platforms are asked to report initial state
+  (`requestState` on iOS, `INITIAL_TRIGGER_ENTER` on Android).
+- Platform limits: iOS monitors at most 20 regions per app and clamps radii
+  above the device maximum; Android allows 100. Delivery is best-effort and can
+  lag by a minute or more — a crossing means "they arrived", not a precise
+  timestamp.
+- Android gains `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLETED`, and a
+  manifest-registered `GeofenceBroadcastReceiver`. Manifest-registered because
+  the whole point is being reachable when the app is not running: Android
+  starts a fresh process for the broadcast, where a runtime-registered receiver
+  would not exist.
+- Web throws `unavailable` for `addGeofence`. A browser can watch a position
+  only while the page is open, which is precisely the dependency this API
+  exists to remove; emulating it by polling would be a worse lie than a clear
+  refusal.
+
 ## [0.2.0] - 2026-07-17
 
 ### Added
